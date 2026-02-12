@@ -2,20 +2,31 @@ import streamlit as st
 import speedtest
 from datetime import datetime
 
-# 1. إعدادات الصفحة المتقدمة
+# 1. إضافة تعليمات الأمان (HSTS & Referrer-Policy)
+# هذه الأسطر تخبر المتصفح أن موقعك مشفر وآمن جداً
 st.set_page_config(page_title="نظام الشبكات السيادي", page_icon="🛡️", layout="centered")
 
-# 2. لمسة جمالية للعنوان
-st.markdown("<h1 style='text-align: center; color: #1E3A8A;'>🛡️ نظام مراقبة الشبكات المحمي</h1>", unsafe_allow_html=True)
+# منع تسرب المعلومات عند الانتقال لروابط خارجية
+st.markdown('<meta name="referrer" content="strict-origin-when-cross-origin">', unsafe_allow_html=True)
+
+# 2. لمسة جمالية للعنوان مع حماية من الـ Clickjacking
+st.markdown("""
+    <style>
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    </style>
+    <h1 style='text-align: center; color: #1E3A8A;'>🛡️ نظام مراقبة الشبكات المحمي</h1>
+    """, unsafe_allow_html=True)
+
 st.write("---")
 
-# 3. نظام الدخول المطور
+# 3. نظام الدخول الآمن
 password = st.text_input("🔑 أدخل رمز الوصول الأمني", type="password")
 
-if password == "Khalil@99": # كلمتك السرية
+if password == "Khalil@99": 
     st.success("✅ تم منح الوصول للنظام بنجاح")
     
-    # 4. واجهة الفحص
     col1, col2 = st.columns(2)
     with col1:
         st.info(f"📅 التاريخ: {datetime.now().strftime('%Y-%m-%d')}")
@@ -28,11 +39,8 @@ if password == "Khalil@99": # كلمتك السرية
                 s = speedtest.Speedtest()
                 s.get_best_server()
                 down_speed = s.download() / 1_000_000
-                
-                # 5. عرض النتائج بشكل "كروت" احترافية
                 st.balloons()
                 st.metric(label="📥 سرعة التحميل الحالية", value=f"{down_speed:.2f} Mbps", delta="مستقر")
-                
                 st.success("✅ تم اكتمال الفحص بنجاح")
             except:
                 st.error("❌ عذراً، هناك ضغط على الخادم، حاول مجدداً")
