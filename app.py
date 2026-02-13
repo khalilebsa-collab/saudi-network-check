@@ -71,3 +71,27 @@ if st.button("🚀 بدء فحص السرعة"):
         except Exception as e:
             st.error("❌ حدث خطأ أثناء قياس السرعة")
             st.write(e)
+# --- لوحة المتابعة ---
+st.markdown("---")
+st.subheader("📊 لوحة المتابعة")
+
+if os.path.isfile("results.csv"):
+    import pandas as pd
+
+    df = pd.read_csv("results.csv")
+
+    st.dataframe(df, use_container_width=True)
+
+    avg_speed = df["speed_mbps"].mean()
+    max_speed = df["speed_mbps"].max()
+    min_speed = df["speed_mbps"].min()
+
+    col1, col2, col3 = st.columns(3)
+
+    col1.metric("📈 متوسط السرعة", f"{avg_speed:.2f} Mbps")
+    col2.metric("🚀 أعلى سرعة", f"{max_speed:.2f} Mbps")
+    col3.metric("🐢 أقل سرعة", f"{min_speed:.2f} Mbps")
+
+    st.line_chart(df["speed_mbps"])
+else:
+    st.info("لا توجد بيانات حتى الآن")
