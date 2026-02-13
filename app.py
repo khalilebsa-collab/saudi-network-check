@@ -4,14 +4,12 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 import sqlite3
 import pandas as pd
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table
-from reportlab.lib.styles import ParagraphStyle
-from reportlab.lib.units import inch
-import io
 
-st.set_page_config(page_title="نظام مراقبة الشبكات", page_icon="🛡️", layout="centered")
+st.set_page_config(page_title="Network Monitor", page_icon="🛡️", layout="centered")
 
 DB_PATH = "results.db"
+
+# ------------------ قاعدة البيانات ------------------
 
 def get_conn():
     return sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -23,8 +21,8 @@ def init_db():
     cur.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL
+            username TEXT UNIQUE,
+            password TEXT
         )
     """)
 
@@ -38,6 +36,7 @@ def init_db():
 
     conn.commit()
 
+    # إنشاء أدمن أول مرة
     cur.execute("SELECT id FROM users WHERE username=?", ("admin",))
     if not cur.fetchone():
         cur.execute("INSERT INTO users (username,password) VALUES (?,?)",
@@ -48,7 +47,7 @@ def init_db():
 
 init_db()
 
-# ------------------ تسجيل دخول ------------------
+# ------------------ تسجيل الدخول ------------------
 
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
@@ -63,45 +62,39 @@ def login(username, password):
     return user
 
 if not st.session_state.logged_in:
-    st.title("🔐 تسجيل الدخول")
-    username = st.text_input("اسم المستخدم")
-    password = st.text_input("كلمة المرور", type="password")
+    st.title("🔐 Login")
 
-    if st.button("دخول"):
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
+
+    if st.button("Login"):
         if login(username, password):
             st.session_state.logged_in = True
             st.rerun()
         else:
-            st.error("بيانات غير صحيحة")
+            st.error("Wrong credentials")
 
     st.stop()
 
 # ------------------ واجهة النظام ------------------
 
-st.title("🛡️ نظام مراقبة الشبكات")
+st.title("🛡️ Network Monitoring System")
 
 now = datetime.now(ZoneInfo("Asia/Riyadh"))
-st.write(f"📅 {now.strftime('%Y-%m-%d')} | ⏰ {now.strftime('%H:%M:%S')}")
+st.write(f"Date: {now.strftime('%Y-%m-%d')} | Time: {now.strftime('%H:%M:%S')}")
 
 # ------------------ فحص الاتصال ------------------
 
 def check_connection():
-    urls = [
-        "https://www.google.com",
-        "https://1.1.1.1"
-    ]
-
-    for url in urls:
-        try:
-            r = requests.get(url, timeout=3)
-            if r.status_code == 200:
-                return "UP"
-        except:
-            continue
-
+    try:
+        r = requests.get("https://www.google.com", timeout=3)
+        if r.status_code == 200:
+            return "UP"
+    except:
+        pass
     return "DOWN"
 
-if st.button("📡 فحص الاتصال الآن"):
+if st.button("📡 Check Connection Now"):
     status = check_connection()
 
     conn = get_conn()
@@ -112,24 +105,25 @@ if st.button("📡 فحص الاتصال الآن"):
     conn.close()
 
     if status == "DOWN":
-        st.error("🚨 الإنترنت متوقف الآن")
+        st.error("🚨 Internet is DOWN")
     else:
-        st.success("✅ الاتصال يعمل")
+        st.success("✅ Internet is UP")
 
-# ------------------ تحليل البيانات ------------------
+# ------------------ التحليل ------------------
 
 conn = get_conn()
 df = pd.read_sql_query("SELECT status, timestamp FROM checks ORDER BY timestamp ASC", conn)
 conn.close()
 
 st.markdown("---")
-st.subheader("📊 تحليل الاستقرار")
+st.subheader("📊 Stability Analysis")
 
 if not df.empty:
-
     total = len(df)
-    up_count = len(df[df["status"]=="UP"])
+    up_count = len(df[df["status"] == "UP"])
     uptime = (up_count / total) * 100
+
+    st.metric("Uptime %", f"{uptime:.2f}%")
 
     df["timestamp"] = pd.to_datetime(df["timestamp"])
 
@@ -138,7 +132,7 @@ if not df.empty:
     longest_outage = 0
     down_start = None
 
-    for i, row in df.iterrows():
+    for _, row in df.iterrows():
         if row["status"] == "DOWN":
             if down_start is None:
                 down_start = row["timestamp"]
@@ -151,40 +145,9 @@ if not df.empty:
                 down_start = None
 
     col1, col2, col3 = st.columns(3)
-    col1.metric("Uptime %", f"{uptime:.2f}%")
-    col2.metric("عدد مرات الانقطاع", outage_count)
-    col3.metric("إجمالي دقائق الانقطاع", f"{downtime_minutes:.2f}")
-
-    # -------- تقرير PDF --------
-
-    if st.button("📄 تحميل التقرير PDF"):
-
-        buffer = io.BytesIO()
-        doc = SimpleDocTemplate(buffer)
-        elements = []
-
-        style = ParagraphStyle(name='NormalStyle', fontSize=14)
-
-        elements.append(Paragraph("Network Monthly Report", style))
-        elements.append(Spacer(1, 0.3 * inch))
-
-        data = [
-            ["Uptime %", f"{uptime:.2f}%"],
-            ["Outage Count", outage_count],
-            ["Total Downtime (min)", f"{downtime_minutes:.2f}"],
-            ["Longest Outage (min)", f"{longest_outage:.2f}"],
-        ]
-
-        elements.append(Table(data))
-        doc.build(elements)
-
-        buffer.seek(0)
-        st.download_button(
-            label="تحميل التقرير",
-            data=buffer,
-            file_name="network_report.pdf",
-            mime="application/pdf"
-        )
+    col1.metric("Outage Count", outage_count)
+    col2.metric("Total Downtime (min)", f"{downtime_minutes:.2f}")
+    col3.metric("Longest Outage (min)", f"{longest_outage:.2f}")
 
 else:
-    st.info("لا توجد بيانات بعد — اضغط فحص الاتصال")
+    st.info("No data yet. Click check connection.")
