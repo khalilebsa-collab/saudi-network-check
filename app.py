@@ -22,28 +22,24 @@ st.markdown("""
 st.write("---")
 
 # 3. نظام الدخول الآمن
-password = st.text_input("🔑 أدخل رمز الوصول الأمني", type="password")
+col1, col2 = st.columns(2)
 
-if password == "Khalil@99": 
-    st.success("✅ تم منح الوصول للنظام بنجاح")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        st.info(f"📅 التاريخ: {datetime.now().strftime('%Y-%m-%d')}")
-    with col2:
-        st.info(f"⏰ الوقت: {datetime.now().strftime('%H:%M:%S')}")
+with col1:
+    st.info(f"📅 التاريخ: {datetime.now().strftime('%Y-%m-%d')}")
 
-    if st.button("🚀 بدء الفحص الشامل"):
-        with st.spinner('🔍 جاري فحص جودة الاتصال وتأمين البيانات...'):
-            try:
-                s = speedtest.Speedtest()
-                s.get_best_server()
-                down_speed = s.download() / 1_000_000
-                st.balloons()
-                st.metric(label="📥 سرعة التحميل الحالية", value=f"{down_speed:.2f} Mbps", delta="مستقر")
-                st.success("✅ تم اكتمال الفحص بنجاح")
-            except:
-                st.error("❌ عذراً، هناك ضغط على الخادم، حاول مجدداً")
-else:
-    if password:
-        st.error("🚫 رمز الوصول خاطئ، تم تسجيل المحاولة")
+with col2:
+    st.info(f"⏰ الوقت: {datetime.now().strftime('%H:%M:%S')}")
+
+if st.button("🚀 بدء فحص السرعة"):
+    with st.spinner("⏳ جاري قياس سرعة الاتصال..."):
+        try:
+            s = speedtest.Speedtest()
+            s.get_best_server()
+            down_speed = s.download() / 1_000_000
+            st.success("✅ تم القياس بنجاح")
+            st.metric(label="⚡ سرعة التحميل", value=f"{down_speed:.2f} Mbps")
+            st.balloons()
+        except:
+            st.error("❌ حدث خطأ أثناء قياس السرعة")
+
+
