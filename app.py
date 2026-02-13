@@ -22,13 +22,15 @@ st.markdown("""
 st.write("---")
 
 # 3. نظام الدخول الآمن
+now = datetime.now(ZoneInfo("Asia/Riyadh"))
+
 col1, col2 = st.columns(2)
 
 with col1:
-    st.info(f"📅 التاريخ: {datetime.now().strftime('%Y-%m-%d')}")
+    st.info(f"📅 التاريخ: {now.strftime('%Y-%m-%d')}")
 
 with col2:
-    st.info(f"⏰ الوقت: {datetime.now().strftime('%H:%M:%S')}")
+    st.info(f"⏰ الوقت: {now.strftime('%H:%M:%S')}")
 
 if st.button("🚀 بدء فحص السرعة"):
     with st.spinner("⏳ جاري قياس سرعة الاتصال..."):
@@ -41,5 +43,6 @@ if st.button("🚀 بدء فحص السرعة"):
             st.balloons()
         except:
             st.error("❌ حدث خطأ أثناء قياس السرعة")
+
 
 
