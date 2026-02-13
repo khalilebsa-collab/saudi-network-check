@@ -30,31 +30,19 @@ now = datetime.now(ZoneInfo("Asia/Riyadh"))
 # عرض التاريخ والوقت
 col1, col2 = st.columns(2)
 
-with col1:
-    st.info(f"📅 التاريخ: {now.strftime('%Y-%m-%d')}")
-
-with col2:
-    st.info(f"⏰ الوقت: {now.strftime('%H:%M:%S')}")
-
-# زر الفحص
 if st.button("🚀 بدء فحص السرعة"):
-
     with st.spinner("⏳ جاري قياس سرعة الاتصال..."):
-
         try:
             s = speedtest.Speedtest()
             s.get_best_server()
             down_speed = s.download() / 1_000_000
 
-            # حفظ النتائج في CSV
             file_exists = os.path.isfile("results.csv")
 
             with open("results.csv", "a", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
-
                 if not file_exists:
                     writer.writerow(["date", "time", "speed_mbps"])
-
                 writer.writerow([
                     now.strftime("%Y-%m-%d"),
                     now.strftime("%H:%M:%S"),
@@ -62,15 +50,12 @@ if st.button("🚀 بدء فحص السرعة"):
                 ])
 
             st.success("✅ تم القياس بنجاح")
-            st.metric(
-                label="⚡ سرعة التحميل",
-                value=f"{down_speed:.2f} Mbps"
-            )
+            st.metric("⚡ سرعة التحميل", f"{down_speed:.2f} Mbps")
             st.balloons()
 
-   except Exception:
-    st.error("❌ حدث خطأ أثناء قياس السرعة — قد يكون بسبب قيود السيرفر")
-
+        except Exception:
+            st.error("❌ حدث خطأ أثناء قياس السرعة")
+            
 # --- لوحة المتابعة ---
 st.markdown("---")
 st.subheader("📊 لوحة المتابعة")
@@ -95,4 +80,5 @@ if os.path.isfile("results.csv"):
     st.line_chart(df["speed_mbps"])
 else:
     st.info("لا توجد بيانات حتى الآن")
+
 
