@@ -5,6 +5,18 @@ from zoneinfo import ZoneInfo
 import sqlite3
 import pandas as pd
 
+conn = sqlite3.connect("results.db")
+c = conn.cursor()
+
+c.execute("""
+CREATE TABLE IF NOT EXISTS speed_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    date TEXT,
+    time TEXT,
+    speed_mbps REAL
+)
+""")
+conn.commit()
 # ------------------ إعدادات عامة ------------------
 st.set_page_config(
     page_title="نظام مراقبة الشبكات المحلي",
@@ -119,3 +131,4 @@ else:
     # الرسم: نعرض آخر 100 قياس (عشان ما يثقل)
     df_plot = df.head(100).iloc[::-1]  # نعكس عشان يصير القديم يسار والجديد يمين
     st.line_chart(df_plot["speed_mbps"])
+
