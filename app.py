@@ -1,16 +1,14 @@
 import streamlit as st
-from ping3 import ping
+import requests
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import sqlite3
 import pandas as pd
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table
 from reportlab.lib.styles import ParagraphStyle
-from reportlab.lib import colors
 from reportlab.lib.units import inch
 import io
 
-# ------------------ إعدادات ------------------
 st.set_page_config(page_title="نظام مراقبة الشبكات", page_icon="🛡️", layout="centered")
 
 DB_PATH = "results.db"
@@ -18,60 +16,47 @@ DB_PATH = "results.db"
 def get_conn():
     return sqlite3.connect(DB_PATH, check_same_thread=False)
 
-# ------------------ تهيئة قاعدة البيانات ------------------
 def init_db():
     conn = get_conn()
     cur = conn.cursor()
 
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS companies (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT UNIQUE NOT NULL
-        )
-    """)
-
-    cur.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL,
-            role TEXT NOT NULL,
-            company_id INTEGER
+            password TEXT NOT NULL
         )
     """)
 
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS pings (
+        CREATE TABLE IF NOT EXISTS checks (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            company_id INTEGER,
             status TEXT,
-            response_time REAL,
             timestamp TEXT
         )
     """)
 
     conn.commit()
 
-    cur.execute("SELECT id FROM companies WHERE name=?", ("Main Company",))
+    cur.execute("SELECT id FROM users WHERE username=?", ("admin",))
     if not cur.fetchone():
-        cur.execute("INSERT INTO companies (name) VALUES (?)", ("Main Company",))
-        company_id = cur.lastrowid
-        cur.execute("INSERT INTO users (username,password,role,company_id) VALUES (?,?,?,?)",
-                    ("admin", "admin123", "admin", company_id))
+        cur.execute("INSERT INTO users (username,password) VALUES (?,?)",
+                    ("admin", "admin123"))
         conn.commit()
 
     conn.close()
 
 init_db()
 
-# ------------------ تسجيل الدخول ------------------
+# ------------------ تسجيل دخول ------------------
+
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
 
 def login(username, password):
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT id, company_id FROM users WHERE username=? AND password=?",
+    cur.execute("SELECT id FROM users WHERE username=? AND password=?",
                 (username, password))
     user = cur.fetchone()
     conn.close()
@@ -83,10 +68,8 @@ if not st.session_state.logged_in:
     password = st.text_input("كلمة المرور", type="password")
 
     if st.button("دخول"):
-        user = login(username, password)
-        if user:
+        if login(username, password):
             st.session_state.logged_in = True
-            st.session_state.company_id = user[1]
             st.rerun()
         else:
             st.error("بيانات غير صحيحة")
@@ -94,26 +77,37 @@ if not st.session_state.logged_in:
     st.stop()
 
 # ------------------ واجهة النظام ------------------
+
 st.title("🛡️ نظام مراقبة الشبكات")
+
 now = datetime.now(ZoneInfo("Asia/Riyadh"))
 st.write(f"📅 {now.strftime('%Y-%m-%d')} | ⏰ {now.strftime('%H:%M:%S')}")
 
-# ------------------ زر فحص Ping ------------------
+# ------------------ فحص الاتصال ------------------
+
+def check_connection():
+    urls = [
+        "https://www.google.com",
+        "https://1.1.1.1"
+    ]
+
+    for url in urls:
+        try:
+            r = requests.get(url, timeout=3)
+            if r.status_code == 200:
+                return "UP"
+        except:
+            continue
+
+    return "DOWN"
+
 if st.button("📡 فحص الاتصال الآن"):
-    response = ping("8.8.8.8", timeout=1)
-    status = "UP" if response else "DOWN"
+    status = check_connection()
 
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO pings (company_id, status, response_time, timestamp)
-        VALUES (?,?,?,?)
-    """, (
-        st.session_state.company_id,
-        status,
-        response if response else 0,
-        now.isoformat()
-    ))
+    cur.execute("INSERT INTO checks (status, timestamp) VALUES (?,?)",
+                (status, now.isoformat()))
     conn.commit()
     conn.close()
 
@@ -123,13 +117,9 @@ if st.button("📡 فحص الاتصال الآن"):
         st.success("✅ الاتصال يعمل")
 
 # ------------------ تحليل البيانات ------------------
+
 conn = get_conn()
-df = pd.read_sql_query("""
-    SELECT status, timestamp
-    FROM pings
-    WHERE company_id=?
-    ORDER BY timestamp ASC
-""", conn, params=(st.session_state.company_id,))
+df = pd.read_sql_query("SELECT status, timestamp FROM checks ORDER BY timestamp ASC", conn)
 conn.close()
 
 st.markdown("---")
@@ -165,8 +155,9 @@ if not df.empty:
     col2.metric("عدد مرات الانقطاع", outage_count)
     col3.metric("إجمالي دقائق الانقطاع", f"{downtime_minutes:.2f}")
 
-    # ------------------ تقرير PDF ------------------
-    if st.button("📄 تحميل التقرير الشهري PDF"):
+    # -------- تقرير PDF --------
+
+    if st.button("📄 تحميل التقرير PDF"):
 
         buffer = io.BytesIO()
         doc = SimpleDocTemplate(buffer)
@@ -174,7 +165,7 @@ if not df.empty:
 
         style = ParagraphStyle(name='NormalStyle', fontSize=14)
 
-        elements.append(Paragraph("Monthly Network Report", style))
+        elements.append(Paragraph("Network Monthly Report", style))
         elements.append(Spacer(1, 0.3 * inch))
 
         data = [
@@ -196,4 +187,4 @@ if not df.empty:
         )
 
 else:
-    st.info("لا توجد بيانات بعد — اضغط فحص الاتصال أولاً")
+    st.info("لا توجد بيانات بعد — اضغط فحص الاتصال")
