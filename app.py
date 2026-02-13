@@ -4,8 +4,6 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 import sqlite3
 import pandas as pd
-import threading
-import time
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib import colors
@@ -33,14 +31,6 @@ def init_db():
     """)
 
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS branches (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            company_id INTEGER,
-            name TEXT NOT NULL
-        )
-    """)
-
-    cur.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT UNIQUE NOT NULL,
@@ -54,8 +44,6 @@ def init_db():
         CREATE TABLE IF NOT EXISTS pings (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             company_id INTEGER,
-            branch_id INTEGER,
-            target TEXT,
             status TEXT,
             response_time REAL,
             timestamp TEXT
@@ -68,7 +56,6 @@ def init_db():
     if not cur.fetchone():
         cur.execute("INSERT INTO companies (name) VALUES (?)", ("Main Company",))
         company_id = cur.lastrowid
-        cur.execute("INSERT INTO branches (company_id, name) VALUES (?,?)", (company_id, "Main Branch"))
         cur.execute("INSERT INTO users (username,password,role,company_id) VALUES (?,?,?,?)",
                     ("admin", "admin123", "admin", company_id))
         conn.commit()
@@ -84,7 +71,7 @@ if "logged_in" not in st.session_state:
 def login(username, password):
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT id, role, company_id FROM users WHERE username=? AND password=?",
+    cur.execute("SELECT id, company_id FROM users WHERE username=? AND password=?",
                 (username, password))
     user = cur.fetchone()
     conn.close()
@@ -92,8 +79,6 @@ def login(username, password):
 
 if not st.session_state.logged_in:
     st.title("🔐 تسجيل الدخول")
-    st.info("admin / admin123")
-
     username = st.text_input("اسم المستخدم")
     password = st.text_input("كلمة المرور", type="password")
 
@@ -101,67 +86,43 @@ if not st.session_state.logged_in:
         user = login(username, password)
         if user:
             st.session_state.logged_in = True
-            st.session_state.company_id = user[2]
+            st.session_state.company_id = user[1]
             st.rerun()
         else:
             st.error("بيانات غير صحيحة")
 
     st.stop()
 
-# ------------------ مراقبة تلقائية ------------------
+# ------------------ واجهة النظام ------------------
+st.title("🛡️ نظام مراقبة الشبكات")
+now = datetime.now(ZoneInfo("Asia/Riyadh"))
+st.write(f"📅 {now.strftime('%Y-%m-%d')} | ⏰ {now.strftime('%H:%M:%S')}")
 
-def monitor_loop(company_id):
-    while True:
-        now = datetime.now(ZoneInfo("Asia/Riyadh"))
-        response = ping("8.8.8.8", timeout=1)
-        status = "UP" if response else "DOWN"
+# ------------------ زر فحص Ping ------------------
+if st.button("📡 فحص الاتصال الآن"):
+    response = ping("8.8.8.8", timeout=1)
+    status = "UP" if response else "DOWN"
 
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("""
-            INSERT INTO pings (company_id, branch_id, target, status, response_time, timestamp)
-            VALUES (?,?,?,?,?,?)
-        """, (
-            company_id,
-            1,
-            "8.8.8.8",
-            status,
-            response if response else 0,
-            now.isoformat()
-        ))
-        conn.commit()
-        conn.close()
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO pings (company_id, status, response_time, timestamp)
+        VALUES (?,?,?,?)
+    """, (
+        st.session_state.company_id,
+        status,
+        response if response else 0,
+        now.isoformat()
+    ))
+    conn.commit()
+    conn.close()
 
-        time.sleep(60)
-
-if "monitor_started" not in st.session_state:
-    thread = threading.Thread(target=monitor_loop, args=(st.session_state.company_id,), daemon=True)
-    thread.start()
-    st.session_state.monitor_started = True
-
-# ------------------ عرض آخر حالة ------------------
-
-conn = get_conn()
-last_status_df = pd.read_sql_query("""
-    SELECT status, timestamp
-    FROM pings
-    WHERE company_id=?
-    ORDER BY id DESC
-    LIMIT 1
-""", conn, params=(st.session_state.company_id,))
-conn.close()
-
-if not last_status_df.empty:
-    last_status = last_status_df.iloc[0]["status"]
-    last_time = last_status_df.iloc[0]["timestamp"]
-
-    if last_status == "DOWN":
-        st.error(f"🚨 تنبيه فوري: الإنترنت متوقف منذ {last_time}")
+    if status == "DOWN":
+        st.error("🚨 الإنترنت متوقف الآن")
     else:
-        st.success("✅ الاتصال مستقر حالياً")
+        st.success("✅ الاتصال يعمل")
 
 # ------------------ تحليل البيانات ------------------
-
 conn = get_conn()
 df = pd.read_sql_query("""
     SELECT status, timestamp
@@ -235,4 +196,4 @@ if not df.empty:
         )
 
 else:
-    st.info("لا توجد بيانات بعد")
+    st.info("لا توجد بيانات بعد — اضغط فحص الاتصال أولاً")
