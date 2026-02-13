@@ -1,6 +1,7 @@
 import streamlit as st
 import speedtest
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 # 1. إضافة تعليمات الأمان (HSTS & Referrer-Policy)
 # هذه الأسطر تخبر المتصفح أن موقعك مشفر وآمن جداً
@@ -43,6 +44,7 @@ if st.button("🚀 بدء فحص السرعة"):
             st.balloons()
         except:
             st.error("❌ حدث خطأ أثناء قياس السرعة")
+
 
 
 
