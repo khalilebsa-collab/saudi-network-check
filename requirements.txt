@@ -1,2 +1,5 @@
 streamlit
 speedtest-cli
+ping3
+reportlab
+pandas
