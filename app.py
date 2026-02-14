@@ -120,7 +120,7 @@ def check_connection():
     return "DOWN"
 
 # فحص تلقائي كل دقيقة
-st.experimental_autorefresh(interval=60 * 1000, key="auto_refresh")
+st.autorefresh(interval=60 * 1000, key="auto_refresh")
 
 status = check_connection()
 
