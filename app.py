@@ -137,8 +137,8 @@ if not st.session_state.logged_in:
     st.title("🔐 Login")
     st.caption("Use your configured credentials to continue.")
 
-    username = st.text_input("khalil47")
-    password = st.text_input("Password", type="Khalil@99")
+    username = st.text_input("Username")
+    password = st.text_input("Password", type="password")
 
     if st.button("Login", type="primary"):
         if login(username, password):
