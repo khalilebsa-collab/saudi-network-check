@@ -57,7 +57,7 @@ def init_db():
     cur.execute("SELECT id FROM users WHERE username=?", ("admin",))
     if not cur.fetchone():
         cur.execute("INSERT INTO users (username,password) VALUES (?,?)",
-                    ("admin", hash_password("Khalil@99")))
+                    ("admin", hash_password("admin123")))
         conn.commit()
 
     conn.close()
@@ -89,7 +89,7 @@ if not st.session_state.logged_in:
     if st.button("Login"):
         if login(username, password):
             st.session_state.logged_in = True
-            st.experimental_rerun()  # إعادة تشغيل الصفحة بعد تسجيل الدخول
+            st.experimental_rerun()  # محاولة لتحديث الصفحة بعد الدخول
         else:
             st.error("Wrong credentials")
 
@@ -141,9 +141,4 @@ while True:
     # تأخير الفحص لمدة دقيقة
     time.sleep(60)
     
-    # نعيد تشغيل الصفحة بعد كل فحص باستخدام session_state
-    if "rerun" not in st.session_state:
-        st.session_state.rerun = True
-        st.experimental_rerun()
     break  # لإنهاء الحلقة بعد الفحص الأول
-
