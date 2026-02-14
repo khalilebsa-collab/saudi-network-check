@@ -89,7 +89,7 @@ if not st.session_state.logged_in:
     if st.button("Login"):
         if login(username, password):
             st.session_state.logged_in = True
-            st.rerun()
+            st.experimental_rerun()  # إعادة تشغيل الصفحة بعد تسجيل الدخول
         else:
             st.error("Wrong credentials")
 
@@ -141,5 +141,8 @@ while True:
     # تأخير الفحص لمدة دقيقة
     time.sleep(60)
     
-    st.experimental_rerun()  # نعيد تشغيل الصفحة بعد كل فحص
+    # نعيد تشغيل الصفحة بعد كل فحص باستخدام session_state
+    if "rerun" not in st.session_state:
+        st.session_state.rerun = True
+        st.experimental_rerun()
     break  # لإنهاء الحلقة بعد الفحص الأول
