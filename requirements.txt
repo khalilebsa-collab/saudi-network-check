@@ -1,3 +1,11 @@
 streamlit
 requests
 pandas
+SQLAlchemy
+flask
+plotly
+twilio
+bcrypt
+redis
+celery
+gunicorn
