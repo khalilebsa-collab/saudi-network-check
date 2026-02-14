@@ -1,8 +1,3 @@
-diff --git a/app.py b/app.py
-index aa5ca72e340d678bf13d9dbb805f14fc70d0aacb..7853460d7f90a4295cb1c85c89ced6f45bd5743e 100644
---- a/app.py
-+++ b/app.py
-@@ -1,143 +1,186 @@
 -import streamlit as st
 -import requests
 -from datetime import datetime
@@ -332,3 +327,4 @@ index aa5ca72e340d678bf13d9dbb805f14fc70d0aacb..7853460d7f90a4295cb1c85c89ced6f4
 +    st.write("No stored checks yet.")
 +else:
 +    st.dataframe(recent_checks, use_container_width=True)
+
