@@ -4,10 +4,19 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 import sqlite3
 import pandas as pd
+import hashlib
 
 st.set_page_config(page_title="Network Monitor", page_icon="🛡️", layout="centered")
 
 DB_PATH = "results.db"
+
+# ------------------ أدوات مساعدة ------------------
+
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def get_now():
+    return datetime.now(ZoneInfo("Asia/Riyadh"))
 
 # ------------------ قاعدة البيانات ------------------
 
@@ -40,7 +49,7 @@ def init_db():
     cur.execute("SELECT id FROM users WHERE username=?", ("admin",))
     if not cur.fetchone():
         cur.execute("INSERT INTO users (username,password) VALUES (?,?)",
-                    ("admin", "admin123"))
+                    ("admin", hash_password("admin123")))
         conn.commit()
 
     conn.close()
@@ -56,7 +65,7 @@ def login(username, password):
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("SELECT id FROM users WHERE username=? AND password=?",
-                (username, password))
+                (username, hash_password(password)))
     user = cur.fetchone()
     conn.close()
     return user
@@ -79,35 +88,44 @@ if not st.session_state.logged_in:
 # ------------------ واجهة النظام ------------------
 
 st.title("🛡️ Network Monitoring System")
-
-now = datetime.now(ZoneInfo("Asia/Riyadh"))
+now = get_now()
 st.write(f"Date: {now.strftime('%Y-%m-%d')} | Time: {now.strftime('%H:%M:%S')}")
 
 # ------------------ فحص الاتصال ------------------
 
+targets = [
+    "https://www.google.com",
+    "https://1.1.1.1",
+    "https://www.cloudflare.com",
+    "https://n-pns.com"
+]
+
 def check_connection():
-    try:
-        r = requests.get("https://www.google.com", timeout=3)
-        if r.status_code == 200:
-            return "UP"
-    except:
-        pass
+    for url in targets:
+        try:
+            r = requests.get(url, timeout=3)
+            if r.status_code == 200:
+                return "UP"
+        except:
+            continue
     return "DOWN"
 
-if st.button("📡 Check Connection Now"):
-    status = check_connection()
+# فحص تلقائي كل دقيقة
+st.experimental_autorefresh(interval=60 * 1000, key="auto_refresh")
 
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("INSERT INTO checks (status, timestamp) VALUES (?,?)",
-                (status, now.isoformat()))
-    conn.commit()
-    conn.close()
+status = check_connection()
 
-    if status == "DOWN":
-        st.error("🚨 Internet is DOWN")
-    else:
-        st.success("✅ Internet is UP")
+conn = get_conn()
+cur = conn.cursor()
+cur.execute("INSERT INTO checks (status, timestamp) VALUES (?,?)",
+            (status, now.isoformat()))
+conn.commit()
+conn.close()
+
+if status == "DOWN":
+    st.error("🚨 Internet is DOWN")
+else:
+    st.success("✅ Internet is UP")
 
 # ------------------ التحليل ------------------
 
@@ -119,13 +137,14 @@ st.markdown("---")
 st.subheader("📊 Stability Analysis")
 
 if not df.empty:
+
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+
     total = len(df)
     up_count = len(df[df["status"] == "UP"])
     uptime = (up_count / total) * 100
 
     st.metric("Uptime %", f"{uptime:.2f}%")
-
-    df["timestamp"] = pd.to_datetime(df["timestamp"])
 
     downtime_minutes = 0
     outage_count = 0
@@ -144,10 +163,17 @@ if not df.empty:
                 outage_count += 1
                 down_start = None
 
+    # معالجة إذا آخر حالة كانت DOWN
+    if down_start is not None:
+        duration = (get_now() - down_start).total_seconds() / 60
+        downtime_minutes += duration
+        longest_outage = max(longest_outage, duration)
+        outage_count += 1
+
     col1, col2, col3 = st.columns(3)
     col1.metric("Outage Count", outage_count)
     col2.metric("Total Downtime (min)", f"{downtime_minutes:.2f}")
     col3.metric("Longest Outage (min)", f"{longest_outage:.2f}")
 
 else:
-    st.info("No data yet. Click check connection.")
+    st.info("Waiting for data...")
