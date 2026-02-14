@@ -1,3 +1,9 @@
+ (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
+diff --git a/app.py b/app.py
+index aa5ca72e340d678bf13d9dbb805f14fc70d0aacb..a39eb5badaa0a126f74d363c713e9c6bd4222914 100644
+--- a/app.py
++++ b/app.py
+@@ -1,143 +1,187 @@
 -import streamlit as st
 -import requests
 -from datetime import datetime
@@ -156,7 +162,7 @@
 +DB_PATH = "results.db"
 +DEFAULT_ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
 +DEFAULT_ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
-+APP_RELEASE_TAG = os.getenv("APP_RELEASE_TAG", "release-speed-check-1")
++APP_RELEASE_TAG = os.getenv("APP_RELEASE_TAG", "hotfix-clean-python-file")
 +
 +
 +# ------------------ أدوات مساعدة ------------------
@@ -299,6 +305,7 @@
 +now = get_now()
 +st.write(f"Date: {now.strftime('%Y-%m-%d')} | Time: {now.strftime('%H:%M:%S')}")
 +st.caption(f"Build tag: {APP_RELEASE_TAG}")
++st.info("If deployment fails, make sure app.py is the raw Python file only (no git diff headers like 'diff --git' or 'index ...').")
 +
 +st.subheader("Connectivity Check")
 +targets = [
@@ -327,4 +334,6 @@
 +    st.write("No stored checks yet.")
 +else:
 +    st.dataframe(recent_checks, use_container_width=True)
-
+ 
+EOF
+)
