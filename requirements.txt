@@ -1,4 +1,4 @@
-streamlit
+streamlit>=1.0.0
 requests
 pandas
 SQLAlchemy
