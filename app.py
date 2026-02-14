@@ -21,10 +21,17 @@ def get_now():
 # ------------------ قاعدة البيانات ------------------
 
 def get_conn():
-    return sqlite3.connect(DB_PATH, check_same_thread=False)
+    try:
+        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        return conn
+    except Exception as e:
+        st.error(f"Database connection error: {e}")
+        return None
 
 def init_db():
     conn = get_conn()
+    if conn is None:
+        return
     cur = conn.cursor()
 
     cur.execute("""
@@ -63,6 +70,8 @@ if "logged_in" not in st.session_state:
 
 def login(username, password):
     conn = get_conn()
+    if conn is None:
+        return False
     cur = conn.cursor()
     cur.execute("SELECT id FROM users WHERE username=? AND password=?",
                 (username, hash_password(password)))
@@ -116,11 +125,12 @@ st.experimental_autorefresh(interval=60 * 1000, key="auto_refresh")
 status = check_connection()
 
 conn = get_conn()
-cur = conn.cursor()
-cur.execute("INSERT INTO checks (status, timestamp) VALUES (?,?)",
-            (status, now.isoformat()))
-conn.commit()
-conn.close()
+if conn is not None:
+    cur = conn.cursor()
+    cur.execute("INSERT INTO checks (status, timestamp) VALUES (?,?)",
+                (status, now.isoformat()))
+    conn.commit()
+    conn.close()
 
 if status == "DOWN":
     st.error("🚨 Internet is DOWN")
@@ -130,50 +140,51 @@ else:
 # ------------------ التحليل ------------------
 
 conn = get_conn()
-df = pd.read_sql_query("SELECT status, timestamp FROM checks ORDER BY timestamp ASC", conn)
-conn.close()
+if conn is not None:
+    df = pd.read_sql_query("SELECT status, timestamp FROM checks ORDER BY timestamp ASC", conn)
+    conn.close()
 
-st.markdown("---")
-st.subheader("📊 Stability Analysis")
+    st.markdown("---")
+    st.subheader("📊 Stability Analysis")
 
-if not df.empty:
+    if not df.empty:
 
-    df["timestamp"] = pd.to_datetime(df["timestamp"])
+        df["timestamp"] = pd.to_datetime(df["timestamp"])
 
-    total = len(df)
-    up_count = len(df[df["status"] == "UP"])
-    uptime = (up_count / total) * 100
+        total = len(df)
+        up_count = len(df[df["status"] == "UP"])
+        uptime = (up_count / total) * 100
 
-    st.metric("Uptime %", f"{uptime:.2f}%")
+        st.metric("Uptime %", f"{uptime:.2f}%")
 
-    downtime_minutes = 0
-    outage_count = 0
-    longest_outage = 0
-    down_start = None
+        downtime_minutes = 0
+        outage_count = 0
+        longest_outage = 0
+        down_start = None
 
-    for _, row in df.iterrows():
-        if row["status"] == "DOWN":
-            if down_start is None:
-                down_start = row["timestamp"]
-        else:
-            if down_start is not None:
-                duration = (row["timestamp"] - down_start).total_seconds() / 60
-                downtime_minutes += duration
-                longest_outage = max(longest_outage, duration)
-                outage_count += 1
-                down_start = None
+        for _, row in df.iterrows():
+            if row["status"] == "DOWN":
+                if down_start is None:
+                    down_start = row["timestamp"]
+            else:
+                if down_start is not None:
+                    duration = (row["timestamp"] - down_start).total_seconds() / 60
+                    downtime_minutes += duration
+                    longest_outage = max(longest_outage, duration)
+                    outage_count += 1
+                    down_start = None
 
-    # معالجة إذا آخر حالة كانت DOWN
-    if down_start is not None:
-        duration = (get_now() - down_start).total_seconds() / 60
-        downtime_minutes += duration
-        longest_outage = max(longest_outage, duration)
-        outage_count += 1
+        # معالجة إذا آخر حالة كانت DOWN
+        if down_start is not None:
+            duration = (get_now() - down_start).total_seconds() / 60
+            downtime_minutes += duration
+            longest_outage = max(longest_outage, duration)
+            outage_count += 1
 
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Outage Count", outage_count)
-    col2.metric("Total Downtime (min)", f"{downtime_minutes:.2f}")
-    col3.metric("Longest Outage (min)", f"{longest_outage:.2f}")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Outage Count", outage_count)
+        col2.metric("Total Downtime (min)", f"{downtime_minutes:.2f}")
+        col3.metric("Longest Outage (min)", f"{longest_outage:.2f}")
 
-else:
-    st.info("Waiting for data...")
+    else:
+        st.info("Waiting for data...")
