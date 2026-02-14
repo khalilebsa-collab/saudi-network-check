@@ -57,7 +57,7 @@ def init_db():
     cur.execute("SELECT id FROM users WHERE username=?", ("admin",))
     if not cur.fetchone():
         cur.execute("INSERT INTO users (username,password) VALUES (?,?)",
-                    ("admin", hash_password("admin123")))
+                    ("admin", hash_password("Khalil@99")))
         conn.commit()
 
     conn.close()
@@ -146,3 +146,4 @@ while True:
         st.session_state.rerun = True
         st.experimental_rerun()
     break  # لإنهاء الحلقة بعد الفحص الأول
+
