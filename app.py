@@ -15,11 +15,31 @@ st.set_page_config(page_title="Network Monitor", page_icon="🛡️", layout="ce
 DB_PATH = "results.db"
 DEFAULT_ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
 DEFAULT_ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
+DEFAULT_MANAGER_USERNAME = os.getenv("MANAGER_USERNAME", "manager")
+DEFAULT_MANAGER_PASSWORD = os.getenv("MANAGER_PASSWORD", "manager123")
+DEFAULT_TECH_USERNAME = os.getenv("TECHNICIAN_USERNAME", "technician")
+DEFAULT_TECH_PASSWORD = os.getenv("TECHNICIAN_PASSWORD", "tech123")
+DEFAULT_CLIENT_USERNAME = os.getenv("CLIENT_USERNAME", "client")
+DEFAULT_CLIENT_PASSWORD = os.getenv("CLIENT_PASSWORD", "client123")
 APP_RELEASE_TAG = os.getenv("APP_RELEASE_TAG", "speed-monitor-v3")
 SPEED_DROP_THRESHOLD_MBPS = float(os.getenv("SPEED_DROP_THRESHOLD_MBPS", "20"))
 QUICK_TEST_INTERVAL_SECONDS = int(os.getenv("QUICK_TEST_INTERVAL_SECONDS", "300"))
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+
+ROLE_LABELS = {
+    "admin": "مدير النظام",
+    "manager": "المدير",
+    "technician": "الفني",
+    "client": "العميل",
+}
+
+DEFAULT_USERS = [
+    (DEFAULT_ADMIN_USERNAME, DEFAULT_ADMIN_PASSWORD, "admin"),
+    (DEFAULT_MANAGER_USERNAME, DEFAULT_MANAGER_PASSWORD, "manager"),
+    (DEFAULT_TECH_USERNAME, DEFAULT_TECH_PASSWORD, "technician"),
+    (DEFAULT_CLIENT_USERNAME, DEFAULT_CLIENT_PASSWORD, "client"),
+]
 
 TARGETS = [
     "https://www.google.com",
@@ -90,10 +110,17 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT UNIQUE,
-                password TEXT
+                password TEXT,
+                role TEXT DEFAULT 'client'
             )
             """
         )
+
+        user_columns = {
+            row[1] for row in cur.execute("PRAGMA table_info(users)").fetchall()
+        }
+        if "role" not in user_columns:
+            cur.execute("ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'client'")
         cur.execute(
             """
             CREATE TABLE IF NOT EXISTS checks (
@@ -129,29 +156,37 @@ def init_db() -> None:
             """
         )
 
-        cur.execute("SELECT id FROM users WHERE username=?", (DEFAULT_ADMIN_USERNAME,))
-        if not cur.fetchone():
-            cur.execute(
-                "INSERT INTO users (username,password) VALUES (?,?)",
-                (DEFAULT_ADMIN_USERNAME, hash_password(DEFAULT_ADMIN_PASSWORD)),
-            )
+        for username, password, role in DEFAULT_USERS:
+            cur.execute("SELECT id FROM users WHERE username=?", (username,))
+            user_exists = cur.fetchone()
+            if not user_exists:
+                cur.execute(
+                    "INSERT INTO users (username, password, role) VALUES (?, ?, ?)",
+                    (username, hash_password(password), role),
+                )
+            else:
+                cur.execute("UPDATE users SET role=? WHERE username=?", (role, username))
 
     conn.close()
 
 
-def login(username: str, password: str):
+def login(username: str, password: str) -> dict | None:
     conn = get_conn()
     if conn is None:
-        return False
+        return None
 
     cur = conn.cursor()
     cur.execute(
-        "SELECT id FROM users WHERE username=? AND password=?",
+        "SELECT id, username, role FROM users WHERE username=? AND password=?",
         (username, hash_password(password)),
     )
     user = cur.fetchone()
     conn.close()
-    return user
+
+    if not user:
+        return None
+
+    return {"id": user[0], "username": user[1], "role": user[2] or "client"}
 
 
 def check_connection(targets: list[str]) -> str:
@@ -411,6 +446,10 @@ if "speed_alert" not in st.session_state:
     st.session_state.speed_alert = None
 if "event_message" not in st.session_state:
     st.session_state.event_message = None
+if "user_role" not in st.session_state:
+    st.session_state.user_role = None
+if "username" not in st.session_state:
+    st.session_state.username = None
 
 
 # ------------------ تسجيل الدخول ------------------
@@ -422,13 +461,19 @@ if not st.session_state.logged_in:
     password = st.text_input("Password", type="password")
 
     if st.button("Login", type="primary"):
-        if login(username, password):
+        authenticated_user = login(username, password)
+        if authenticated_user:
             st.session_state.logged_in = True
+            st.session_state.user_role = authenticated_user["role"]
+            st.session_state.username = authenticated_user["username"]
             st.rerun()
         else:
             st.error("Wrong credentials")
 
-    st.info("Tip: You can set ADMIN_USERNAME and ADMIN_PASSWORD as environment variables.")
+    st.info(
+        "Available default users: admin/admin123, manager/manager123, "
+        "technician/tech123, client/client123 (or override with env vars)."
+    )
     st.stop()
 
 
@@ -437,6 +482,24 @@ st.title("🛡️ Network Monitoring System")
 now = get_now()
 st.write(f"Date: {now.strftime('%Y-%m-%d')} | Time: {now.strftime('%H:%M:%S')}")
 st.caption(f"Build tag: {APP_RELEASE_TAG}")
+
+current_role = st.session_state.user_role or "client"
+current_username = st.session_state.username or "-"
+
+role_badge_col, logout_col = st.columns([4, 1])
+with role_badge_col:
+    st.info(
+        f"Logged in as: {current_username} | Role: {ROLE_LABELS.get(current_role, current_role)}"
+    )
+with logout_col:
+    if st.button("Logout"):
+        st.session_state.logged_in = False
+        st.session_state.user_role = None
+        st.session_state.username = None
+        st.rerun()
+
+can_run_operations = current_role in {"admin", "manager", "technician"}
+can_view_incidents = current_role in {"admin", "manager", "technician"}
 
 st.subheader("SLA Snapshot (Last 24h)")
 sla = compute_sla(24)
@@ -451,11 +514,17 @@ st.caption("Targets: " + ", ".join(TARGETS))
 
 col_run, col_auto = st.columns([1, 2])
 with col_run:
-    run_connectivity = st.button("Run check now", type="primary")
+    run_connectivity = st.button("Run check now", type="primary", disabled=not can_run_operations)
 with col_auto:
-    auto_quick_test = st.checkbox("Auto quick speed test when internet check runs", value=True)
+    auto_quick_test = st.checkbox(
+        "Auto quick speed test when internet check runs",
+        value=True,
+        disabled=not can_run_operations,
+    )
+if not can_run_operations:
+    st.caption("Read-only mode: your role can view status but cannot run active checks.")
 
-if run_connectivity:
+if run_connectivity and can_run_operations:
     current_status = check_connection(TARGETS)
     down_started, down_recovered = track_incident_transition(current_status)
     save_check(current_status)
@@ -488,8 +557,8 @@ st.caption(
 )
 
 c1, c2 = st.columns(2)
-full_clicked = c1.button("Run full speed test")
-quick_clicked = c2.button("Run quick speed test")
+full_clicked = c1.button("Run full speed test", disabled=not can_run_operations)
+quick_clicked = c2.button("Run quick speed test", disabled=not can_run_operations)
 
 if full_clicked or quick_clicked:
     mode = "full" if full_clicked else "quick"
@@ -560,12 +629,13 @@ if recent_speed.empty:
 else:
     st.dataframe(recent_speed, width="stretch")
 
-st.subheader("Incident timeline")
-incident_df = get_incidents()
-if incident_df.empty:
-    st.write("No incidents yet.")
-else:
-    st.dataframe(incident_df, width="stretch")
+if can_view_incidents:
+    st.subheader("Incident timeline")
+    incident_df = get_incidents()
+    if incident_df.empty:
+        st.write("No incidents yet.")
+    else:
+        st.dataframe(incident_df, width="stretch")
 
 if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
     st.caption("Telegram alerts are enabled.")
