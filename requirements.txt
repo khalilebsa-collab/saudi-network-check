@@ -9,3 +9,4 @@ bcrypt
 redis
 celery
 gunicorn
+speedtest-cli
