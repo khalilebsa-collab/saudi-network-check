@@ -89,7 +89,6 @@ if not st.session_state.logged_in:
     if st.button("Login"):
         if login(username, password):
             st.session_state.logged_in = True
-            st.experimental_rerun()  # محاولة لتحديث الصفحة بعد الدخول
         else:
             st.error("Wrong credentials")
 
@@ -98,47 +97,4 @@ if not st.session_state.logged_in:
 # ------------------ واجهة النظام ------------------
 
 st.title("🛡️ Network Monitoring System")
-now = get_now()
-st.write(f"Date: {now.strftime('%Y-%m-%d')} | Time: {now.strftime('%H:%M:%S')}")
-st.write("Site is working!")  # تحقق من عمل الصفحة بشكل صحيح
-
-# ------------------ فحص الاتصال ------------------
-
-targets = [
-    "https://www.google.com",
-    "https://1.1.1.1",
-    "https://www.cloudflare.com",
-    "https://n-pns.com"
-]
-
-def check_connection():
-    for url in targets:
-        try:
-            r = requests.get(url, timeout=3)
-            if r.status_code == 200:
-                return "UP"
-        except:
-            continue
-    return "DOWN"
-
-# فحص تلقائي كل دقيقة باستخدام time.sleep()
-while True:
-    status = check_connection()
-
-    conn = get_conn()
-    if conn is not None:
-        cur = conn.cursor()
-        cur.execute("INSERT INTO checks (status, timestamp) VALUES (?,?)",
-                    (status, now.isoformat()))
-        conn.commit()
-        conn.close()
-
-    if status == "DOWN":
-        st.error("🚨 Internet is DOWN")
-    else:
-        st.success("✅ Internet is UP")
-
-    # تأخير الفحص لمدة دقيقة
-    time.sleep(60)
-    
-    break  # لإنهاء الحلقة بعد الفحص الأول
+now = get_now(_
