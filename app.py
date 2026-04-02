@@ -174,13 +174,28 @@ def insert_names(values: dict) -> None:
         )
 
 
+def delete_by_number(table: str, number_text: str) -> int:
+    with get_conn() as conn:
+        cursor = conn.execute(
+            f"DELETE FROM {table} WHERE number_text = ?",
+            (number_text,),
+        )
+        return cursor.rowcount
+
+
+def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    cleaned = df.copy()
+    cleaned.columns = [str(col).strip() for col in cleaned.columns]
+    return cleaned
+
+
 def parse_uploaded_dataframe(uploaded_file) -> tuple[pd.DataFrame, str | None]:
     file_name = uploaded_file.name.lower()
     try:
         if file_name.endswith(".csv"):
-            return pd.read_csv(uploaded_file), None
+            return normalize_columns(pd.read_csv(uploaded_file)), None
         if file_name.endswith(".xlsx"):
-            return pd.read_excel(uploaded_file), None
+            return normalize_columns(pd.read_excel(uploaded_file)), None
         return pd.DataFrame(), "صيغة الملف غير مدعومة. استخدم CSV أو XLSX."
     except Exception as error:
         return pd.DataFrame(), f"تعذر قراءة الملف: {error}"
@@ -216,8 +231,8 @@ st.title("📁 نظام إدارة بيانات الموظفين")
 st.caption("نسخة أولية مطابقة مبدئيًا للنموذجين المرسلين، مع إدخال يدوي + بحث + استيراد/تصدير.")
 st.info("تشغيل البرنامج يكون عبر الأمر: streamlit run app.py")
 
-main_tab, admin_tab, names_tab, import_export_tab = st.tabs(
-    ["لوحة البيانات", "نموذج الإدارة", "بيان الأسماء", "الاستيراد والتصدير"]
+main_tab, admin_tab, names_tab, records_tab, import_export_tab = st.tabs(
+    ["لوحة البيانات", "نموذج الإدارة", "بيان الأسماء", "إدارة السجلات", "الاستيراد والتصدير"]
 )
 
 with main_tab:
@@ -327,6 +342,24 @@ with names_tab:
     st.markdown("#### جدول بيان الأسماء")
     st.dataframe(fetch_df("names_form"), use_container_width=True, hide_index=True)
 
+with records_tab:
+    st.subheader("إدارة السجلات (حذف حسب الرقم)")
+    st.caption("لأمان البيانات: الحذف يتم فقط بعد إدخال رقم السجل بشكل صريح.")
+    table_choice = st.selectbox("اختر الجدول", ["admin_form", "names_form"])
+    number_to_delete = st.text_input("رقم السجل المراد حذفه")
+    if st.button("حذف السجل", type="primary"):
+        if not number_to_delete.strip():
+            st.error("يرجى إدخال الرقم أولًا.")
+        else:
+            deleted = delete_by_number(table_choice, number_to_delete.strip())
+            if deleted > 0:
+                st.success(f"تم حذف {deleted} سجل من {table_choice}.")
+            else:
+                st.warning("لم يتم العثور على سجل مطابق لهذا الرقم.")
+
+    st.markdown("#### آخر البيانات الحالية")
+    st.dataframe(fetch_df(table_choice), use_container_width=True, hide_index=True)
+
 with import_export_tab:
     st.subheader("الاستيراد")
     st.caption("يدعم هذه النسخة التجريبية: CSV و XLSX بشكل مباشر.")
@@ -357,6 +390,23 @@ with import_export_tab:
                         for _, rec in imported_df.iterrows():
                             insert_names(rec.to_dict())
                     st.success("تم الاستيراد بنجاح وتوزيع البيانات على الجدول المحدد.")
+
+    st.divider()
+    st.subheader("قوالب جاهزة للاستيراد")
+    admin_template = pd.DataFrame(columns=ADMIN_COLUMNS)
+    names_template = pd.DataFrame(columns=NAMES_COLUMNS)
+    st.download_button(
+        "تحميل قالب نموذج الإدارة (CSV)",
+        data=dataframe_to_csv_bytes(admin_template),
+        file_name="admin_form_template.csv",
+        mime="text/csv",
+    )
+    st.download_button(
+        "تحميل قالب بيان الأسماء (CSV)",
+        data=dataframe_to_csv_bytes(names_template),
+        file_name="names_form_template.csv",
+        mime="text/csv",
+    )
 
     st.divider()
     st.subheader("التصدير")
