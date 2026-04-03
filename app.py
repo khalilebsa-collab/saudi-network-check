@@ -16,11 +16,11 @@ ADMIN_COLUMNS = [
     "تاريخ آخر مهمة",
     "النخبة",
     "مستهدف",
-    "مجازة للدورة",
+    "اجتاز الدورة",
     "الرماية",
     "اللياقة",
     "الوزن",
-    "رقم التأشيرة",
+    "نوع التأشيرة",
     "تاريخ انتهاء التأشيرة",
     "ملاحظات",
 ]
@@ -97,8 +97,8 @@ def fetch_df(table: str) -> pd.DataFrame:
                 SELECT number_text AS 'الرقم', name AS 'الاسم', rank AS 'الرتبة',
                        last_mission AS 'آخر مهمة', last_mission_date AS 'تاريخ آخر مهمة',
                        elite_flag AS 'النخبة', target_flag AS 'مستهدف',
-                       course_cleared AS 'مجازة للدورة', shooting AS 'الرماية',
-                       fitness AS 'اللياقة', weight_text AS 'الوزن', visa_number AS 'رقم التأشيرة',
+                       course_cleared AS 'اجتاز الدورة', shooting AS 'الرماية',
+                       fitness AS 'اللياقة', weight_text AS 'الوزن', visa_number AS 'نوع التأشيرة',
                        visa_expiry AS 'تاريخ انتهاء التأشيرة', notes AS 'ملاحظات'
                 FROM admin_form
                 ORDER BY id DESC
@@ -136,11 +136,11 @@ def insert_admin(values: dict) -> None:
                 values["تاريخ آخر مهمة"],
                 values["النخبة"],
                 values["مستهدف"],
-                values["مجازة للدورة"],
+                values["اجتاز الدورة"],
                 values["الرماية"],
                 values["اللياقة"],
                 values["الوزن"],
-                values["رقم التأشيرة"],
+                values["نوع التأشيرة"],
                 values["تاريخ انتهاء التأشيرة"],
                 values["ملاحظات"],
                 datetime.now().isoformat(),
@@ -277,7 +277,7 @@ with admin_tab:
                 "تاريخ آخر مهمة": row2[0].text_input("تاريخ آخر مهمة"),
                 "النخبة": row2[1].selectbox("النخبة", ["", "نعم", "لا"]),
                 "مستهدف": row2[2].selectbox("مستهدف", ["", "نعم", "لا"]),
-                "مجازة للدورة": row2[3].selectbox("مجازة للدورة", ["", "نعم", "لا"]),
+                "اجتاز الدورة": row2[3].selectbox("اجتاز الدورة", ["", "نعم", "لا"]),
             }
         )
         row3 = st.columns(4)
@@ -286,7 +286,7 @@ with admin_tab:
                 "الرماية": row3[0].text_input("الرماية"),
                 "اللياقة": row3[1].text_input("اللياقة"),
                 "الوزن": row3[2].text_input("الوزن"),
-                "رقم التأشيرة": row3[3].text_input("رقم التأشيرة"),
+                "نوع التأشيرة": row3[3].text_input("نوع التأشيرة"),
             }
         )
         values["تاريخ انتهاء التأشيرة"] = st.text_input("تاريخ انتهاء التأشيرة")
