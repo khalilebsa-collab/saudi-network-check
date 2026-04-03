@@ -200,6 +200,62 @@ def delete_by_number(table: str, number_text: str) -> int:
         return cursor.rowcount
 
 
+def delete_by_number_and_name(table: str, number_text: str, name_text: str) -> int:
+    cleaned_number = normalize_number_text(number_text)
+    cleaned_name = str(name_text).strip()
+    with get_conn() as conn:
+        if table == "admin_form":
+            rows = conn.execute("SELECT id, number_text, name FROM admin_form").fetchall()
+        else:
+            rows = conn.execute("SELECT id, number_text, arabic_name FROM names_form").fetchall()
+
+        matched_ids = [
+            row_id
+            for row_id, stored_number, stored_name in rows
+            if normalize_number_text(stored_number) == cleaned_number
+            and str(stored_name).strip() == cleaned_name
+        ]
+
+        if not matched_ids:
+            return 0
+        placeholders = ",".join("?" for _ in matched_ids)
+        cursor = conn.execute(
+            f"DELETE FROM {table} WHERE id IN ({placeholders})",
+            matched_ids,
+        )
+        return cursor.rowcount
+
+
+def delete_by_row_id(table: str, row_id: int) -> int:
+    with get_conn() as conn:
+        cursor = conn.execute(
+            f"DELETE FROM {table} WHERE id = ?",
+            (row_id,),
+        )
+        return cursor.rowcount
+
+
+def fetch_records_for_delete(table: str) -> pd.DataFrame:
+    with get_conn() as conn:
+        if table == "admin_form":
+            return pd.read_sql_query(
+                """
+                SELECT id, number_text AS 'الرقم', name AS 'الاسم', rank AS 'الرتبة'
+                FROM admin_form
+                ORDER BY id DESC
+                """,
+                conn,
+            )
+        return pd.read_sql_query(
+            """
+            SELECT id, number_text AS 'الرقم', arabic_name AS 'الاسم', rank AS 'الرتبة'
+            FROM names_form
+            ORDER BY id DESC
+            """,
+            conn,
+        )
+
+
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     cleaned = df.copy()
     cleaned.columns = [str(col).strip() for col in cleaned.columns]
@@ -360,19 +416,66 @@ with names_tab:
     st.dataframe(fetch_df("names_form"), use_container_width=True, hide_index=True)
 
 with records_tab:
-    st.subheader("إدارة السجلات (حذف حسب الرقم)")
-    st.caption("لأمان البيانات: الحذف يتم فقط بعد إدخال رقم السجل بشكل صريح.")
+    st.subheader("إدارة السجلات (حذف السجلات الخاطئة)")
+    st.caption("يمكنك الآن الحذف برقم فقط أو رقم + اسم أو حذف سجل كامل بدقة عبر المعرف.")
     table_choice = st.selectbox("اختر الجدول", ["admin_form", "names_form"])
-    number_to_delete = st.text_input("رقم السجل المراد حذفه")
-    if st.button("حذف السجل", type="primary"):
-        if not number_to_delete.strip():
-            st.error("يرجى إدخال الرقم أولًا.")
-        else:
-            deleted = delete_by_number(table_choice, number_to_delete.strip())
-            if deleted > 0:
-                st.success(f"تم حذف {deleted} سجل من {table_choice}.")
+    delete_mode = st.radio(
+        "طريقة الحذف",
+        [
+            "حذف حسب الرقم",
+            "حذف حسب الرقم + الاسم",
+            "حذف سجل كامل (اختيار سجل محدد)",
+        ],
+    )
+
+    if delete_mode == "حذف حسب الرقم":
+        number_to_delete = st.text_input("رقم السجل المراد حذفه", key="delete_number_only")
+        if st.button("حذف بالرقم", type="primary"):
+            if not number_to_delete.strip():
+                st.error("يرجى إدخال الرقم أولًا.")
             else:
-                st.warning("لم يتم العثور على سجل مطابق لهذا الرقم.")
+                deleted = delete_by_number(table_choice, number_to_delete.strip())
+                if deleted > 0:
+                    st.success(f"تم حذف {deleted} سجل من {table_choice}.")
+                else:
+                    st.warning("لم يتم العثور على سجل مطابق لهذا الرقم.")
+
+    elif delete_mode == "حذف حسب الرقم + الاسم":
+        c1, c2 = st.columns(2)
+        number_to_delete = c1.text_input("رقم السجل", key="delete_number_name_number")
+        name_to_delete = c2.text_input("اسم السجل", key="delete_number_name_name")
+        if st.button("حذف بالرقم والاسم", type="primary"):
+            if not number_to_delete.strip() or not name_to_delete.strip():
+                st.error("يرجى إدخال الرقم والاسم معًا.")
+            else:
+                deleted = delete_by_number_and_name(
+                    table_choice,
+                    number_to_delete.strip(),
+                    name_to_delete.strip(),
+                )
+                if deleted > 0:
+                    st.success(f"تم حذف {deleted} سجل مطابق للرقم والاسم.")
+                else:
+                    st.warning("لم يتم العثور على سجل مطابق للرقم والاسم.")
+
+    else:
+        delete_df = fetch_records_for_delete(table_choice)
+        if delete_df.empty:
+            st.info("لا توجد سجلات حالياً للحذف.")
+        else:
+            options = [
+                f"{int(row.id)} | {row['الرقم']} | {row['الاسم']} | {row['الرتبة']}"
+                for _, row in delete_df.iterrows()
+            ]
+            selected_option = st.selectbox("اختر سجلًا كاملاً للحذف", options)
+            selected_id = int(selected_option.split("|", maxsplit=1)[0].strip())
+            st.warning("تنبيه: سيتم حذف السجل المحدد بالكامل نهائيًا.")
+            if st.button("تأكيد حذف السجل المحدد", type="primary"):
+                deleted = delete_by_row_id(table_choice, selected_id)
+                if deleted > 0:
+                    st.success("تم حذف السجل الكامل بنجاح.")
+                else:
+                    st.warning("تعذر حذف السجل، ربما تم حذفه مسبقًا.")
 
     st.markdown("#### آخر البيانات الحالية")
     st.dataframe(fetch_df(table_choice), use_container_width=True, hide_index=True)
@@ -391,22 +494,57 @@ with import_export_tab:
         else:
             st.write("معاينة البيانات:")
             st.dataframe(imported_df.head(20), use_container_width=True)
+            required_cols = ADMIN_COLUMNS if target_table == "admin_form" else NAMES_COLUMNS
+
+            st.markdown("#### اختر الخانات التي تريد استيرادها")
+            selected_target_columns = st.multiselect(
+                "الخانات المطلوب تعبئتها في النظام",
+                required_cols,
+                default=[col for col in required_cols if col in imported_df.columns],
+            )
+
+            column_mapping: dict[str, str] = {}
+            if selected_target_columns:
+                st.markdown("#### اربط كل خانة بعمود من ملفك")
+                for target_col in selected_target_columns:
+                    default_index = (
+                        imported_df.columns.get_loc(target_col)
+                        if target_col in imported_df.columns
+                        else 0
+                    )
+                    source_col = st.selectbox(
+                        f"المصدر لحقل: {target_col}",
+                        options=imported_df.columns.tolist(),
+                        index=default_index,
+                        key=f"map_{target_table}_{target_col}",
+                    )
+                    column_mapping[target_col] = source_col
+
             if st.button("تنفيذ الاستيراد", type="primary"):
-                missing_cols = [
-                    col
-                    for col in (ADMIN_COLUMNS if target_table == "admin_form" else NAMES_COLUMNS)
-                    if col not in imported_df.columns
-                ]
-                if missing_cols:
-                    st.error(f"الأعمدة التالية ناقصة: {', '.join(missing_cols)}")
+                if not selected_target_columns:
+                    st.error("اختر خانة واحدة على الأقل للاستيراد.")
                 else:
+                    mapped_sources = list(column_mapping.values())
+                    missing_sources = [src for src in mapped_sources if src not in imported_df.columns]
+                    if missing_sources:
+                        st.error(f"تعذر العثور على أعمدة المصدر التالية: {', '.join(missing_sources)}")
+                        st.stop()
+
                     if target_table == "admin_form":
                         for _, rec in imported_df.iterrows():
-                            insert_admin(rec.to_dict())
+                            payload = {col: "" for col in ADMIN_COLUMNS}
+                            for target_col, source_col in column_mapping.items():
+                                value = rec[source_col]
+                                payload[target_col] = "" if pd.isna(value) else str(value).strip()
+                            insert_admin(payload)
                     else:
                         for _, rec in imported_df.iterrows():
-                            insert_names(rec.to_dict())
-                    st.success("تم الاستيراد بنجاح وتوزيع البيانات على الجدول المحدد.")
+                            payload = {col: "" for col in NAMES_COLUMNS}
+                            for target_col, source_col in column_mapping.items():
+                                value = rec[source_col]
+                                payload[target_col] = "" if pd.isna(value) else str(value).strip()
+                            insert_names(payload)
+                    st.success("تم الاستيراد بنجاح حسب الخانات التي اخترتها.")
 
     st.divider()
     st.subheader("قوالب جاهزة للاستيراد")
