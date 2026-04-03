@@ -44,6 +44,11 @@ def get_conn() -> sqlite3.Connection:
     return sqlite3.connect(DB_PATH, check_same_thread=False)
 
 
+def normalize_number_text(value: str) -> str:
+    translation_map = str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")
+    return str(value).translate(translation_map).strip()
+
+
 def init_db() -> None:
     with get_conn() as conn:
         conn.execute(
@@ -120,6 +125,7 @@ def fetch_df(table: str) -> pd.DataFrame:
 
 def insert_admin(values: dict) -> None:
     with get_conn() as conn:
+        number_text = normalize_number_text(values["الرقم"])
         conn.execute(
             """
             INSERT INTO admin_form (
@@ -129,7 +135,7 @@ def insert_admin(values: dict) -> None:
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                values["الرقم"],
+                number_text,
                 values["الاسم"],
                 values["الرتبة"],
                 values["آخر مهمة"],
@@ -150,6 +156,7 @@ def insert_admin(values: dict) -> None:
 
 def insert_names(values: dict) -> None:
     with get_conn() as conn:
+        number_text = normalize_number_text(values["الرقم"])
         conn.execute(
             """
             INSERT INTO names_form (
@@ -158,7 +165,7 @@ def insert_names(values: dict) -> None:
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                values["الرقم"],
+                number_text,
                 values["الاسم"],
                 values["NAME"],
                 values["الرتبة"],
@@ -175,10 +182,20 @@ def insert_names(values: dict) -> None:
 
 
 def delete_by_number(table: str, number_text: str) -> int:
+    cleaned_number = normalize_number_text(number_text)
     with get_conn() as conn:
+        rows = conn.execute(f"SELECT id, number_text FROM {table}").fetchall()
+        matched_ids = [
+            row_id
+            for row_id, stored_number in rows
+            if normalize_number_text(stored_number) == cleaned_number
+        ]
+        if not matched_ids:
+            return 0
+        placeholders = ",".join("?" for _ in matched_ids)
         cursor = conn.execute(
-            f"DELETE FROM {table} WHERE number_text = ?",
-            (number_text,),
+            f"DELETE FROM {table} WHERE id IN ({placeholders})",
+            matched_ids,
         )
         return cursor.rowcount
 
