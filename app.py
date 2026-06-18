@@ -1,643 +1,587 @@
-import hashlib
-import os
 import sqlite3
-import time
 from datetime import datetime
-from statistics import mean
-from zoneinfo import ZoneInfo
 
 import pandas as pd
-import requests
 import streamlit as st
 
-st.set_page_config(page_title="Network Monitor", page_icon="🛡️", layout="centered")
+st.set_page_config(page_title="نظام قاعدة بيانات الموظفين", page_icon="📁", layout="wide")
 
-DB_PATH = "results.db"
-DEFAULT_ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
-DEFAULT_ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
-DEFAULT_MANAGER_USERNAME = os.getenv("MANAGER_USERNAME", "manager")
-DEFAULT_MANAGER_PASSWORD = os.getenv("MANAGER_PASSWORD", "manager123")
-DEFAULT_TECH_USERNAME = os.getenv("TECHNICIAN_USERNAME", "technician")
-DEFAULT_TECH_PASSWORD = os.getenv("TECHNICIAN_PASSWORD", "tech123")
-DEFAULT_CLIENT_USERNAME = os.getenv("CLIENT_USERNAME", "client")
-DEFAULT_CLIENT_PASSWORD = os.getenv("CLIENT_PASSWORD", "client123")
-APP_RELEASE_TAG = os.getenv("APP_RELEASE_TAG", "speed-monitor-v3")
-SPEED_DROP_THRESHOLD_MBPS = float(os.getenv("SPEED_DROP_THRESHOLD_MBPS", "20"))
-QUICK_TEST_INTERVAL_SECONDS = int(os.getenv("QUICK_TEST_INTERVAL_SECONDS", "300"))
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+DB_PATH = "employees.db"
 
-ROLE_LABELS = {
-    "admin": "مدير النظام",
-    "manager": "المدير",
-    "technician": "الفني",
-    "client": "العميل",
-}
-
-DEFAULT_USERS = [
-    (DEFAULT_ADMIN_USERNAME, DEFAULT_ADMIN_PASSWORD, "admin"),
-    (DEFAULT_MANAGER_USERNAME, DEFAULT_MANAGER_PASSWORD, "manager"),
-    (DEFAULT_TECH_USERNAME, DEFAULT_TECH_PASSWORD, "technician"),
-    (DEFAULT_CLIENT_USERNAME, DEFAULT_CLIENT_PASSWORD, "client"),
+ADMIN_COLUMNS = [
+    "الرقم",
+    "الاسم",
+    "الرتبة",
+    "آخر مهمة",
+    "تاريخ آخر مهمة",
+    "النخبة",
+    "مستهدف",
+    "اجتاز الدورة",
+    "الرماية",
+    "اللياقة",
+    "الوزن",
+    "نوع التأشيرة",
+    "تاريخ انتهاء التأشيرة",
+    "ملاحظات",
 ]
 
-TARGETS = [
-    "https://www.google.com",
-    "https://1.1.1.1",
-    "https://www.cloudflare.com",
-    "https://n-pns.com",
-]
-
-SPEED_TEST_URLS = [
-    "https://speed.hetzner.de/10MB.bin",
-    "https://proof.ovh.net/files/10Mb.dat",
+NAMES_COLUMNS = [
+    "الرقم",
+    "الاسم",
+    "NAME",
+    "الرتبة",
+    "السجل المدني",
+    "DOB",
+    "DOE",
+    "رقم الجواز",
+    "رقم الايبان",
+    "المهمة",
+    "الطائرة",
 ]
 
 
-# ------------------ أدوات مساعدة ------------------
-def hash_password(password: str) -> str:
-    return hashlib.sha256(password.encode()).hexdigest()
+def get_conn() -> sqlite3.Connection:
+    return sqlite3.connect(DB_PATH, check_same_thread=False)
 
 
-def get_now() -> datetime:
-    return datetime.now(ZoneInfo("Asia/Riyadh"))
+def normalize_number_text(value: str) -> str:
+    translation_map = str.maketrans("٠١٢٣٤٥٦٧٨٩", "0123456789")
+    return str(value).translate(translation_map).strip()
 
 
-def get_conn():
-    try:
-        return sqlite3.connect(DB_PATH, check_same_thread=False)
-    except Exception as error:
-        st.error(f"Database connection error: {error}")
-        return None
-
-
-def format_duration(seconds: float | None) -> str:
-    if seconds is None:
-        return "-"
-    if seconds < 60:
-        return f"{int(seconds)}s"
-    minutes, sec = divmod(int(seconds), 60)
-    if minutes < 60:
-        return f"{minutes}m {sec}s"
-    hours, minutes = divmod(minutes, 60)
-    return f"{hours}h {minutes}m"
-
-
-def send_telegram_alert(message: str) -> bool:
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        return False
-    try:
-        requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-            json={"chat_id": TELEGRAM_CHAT_ID, "text": message},
-            timeout=8,
-        )
-        return True
-    except requests.RequestException:
-        return False
-
-
-# ------------------ قاعدة البيانات ------------------
 def init_db() -> None:
-    conn = get_conn()
-    if conn is None:
-        return
-
-    with conn:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT UNIQUE,
-                password TEXT,
-                role TEXT DEFAULT 'client'
-            )
-            """
-        )
-
-        user_columns = {
-            row[1] for row in cur.execute("PRAGMA table_info(users)").fetchall()
-        }
-        if "role" not in user_columns:
-            cur.execute("ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'client'")
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS checks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                status TEXT,
-                timestamp TEXT
-            )
-            """
-        )
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS speed_checks (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                mode TEXT,
-                download_mbps REAL,
-                latency_ms REAL,
-                drop_detected INTEGER,
-                threshold_mbps REAL,
-                timestamp TEXT
-            )
-            """
-        )
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS incidents (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                started_at TEXT,
-                ended_at TEXT,
-                duration_seconds REAL,
-                start_reason TEXT,
-                end_reason TEXT
-            )
-            """
-        )
-
-        for username, password, role in DEFAULT_USERS:
-            cur.execute("SELECT id FROM users WHERE username=?", (username,))
-            user_exists = cur.fetchone()
-            if not user_exists:
-                cur.execute(
-                    "INSERT INTO users (username, password, role) VALUES (?, ?, ?)",
-                    (username, hash_password(password), role),
-                )
-            else:
-                cur.execute("UPDATE users SET role=? WHERE username=?", (role, username))
-
-    conn.close()
-
-
-def login(username: str, password: str) -> dict | None:
-    conn = get_conn()
-    if conn is None:
-        return None
-
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT id, username, role FROM users WHERE username=? AND password=?",
-        (username, hash_password(password)),
-    )
-    user = cur.fetchone()
-    conn.close()
-
-    if not user:
-        return None
-
-    return {"id": user[0], "username": user[1], "role": user[2] or "client"}
-
-
-def check_connection(targets: list[str]) -> str:
-    for url in targets:
-        try:
-            response = requests.get(url, timeout=3)
-            if response.status_code == 200:
-                return "UP"
-        except requests.RequestException:
-            continue
-    return "DOWN"
-
-
-def get_last_status() -> str | None:
-    conn = get_conn()
-    if conn is None:
-        return None
-    row = conn.execute("SELECT status FROM checks ORDER BY id DESC LIMIT 1").fetchone()
-    conn.close()
-    return row[0] if row else None
-
-
-def save_check(status: str) -> None:
-    conn = get_conn()
-    if conn is None:
-        return
-
-    with conn:
+    with get_conn() as conn:
         conn.execute(
-            "INSERT INTO checks (status, timestamp) VALUES (?,?)",
-            (status, get_now().isoformat()),
-        )
-    conn.close()
-
-
-def get_recent_checks(limit: int = 20) -> pd.DataFrame:
-    conn = get_conn()
-    if conn is None:
-        return pd.DataFrame(columns=["status", "timestamp"])
-
-    query = "SELECT status, timestamp FROM checks ORDER BY id DESC LIMIT ?"
-    df = pd.read_sql_query(query, conn, params=(limit,))
-    conn.close()
-    return df
-
-
-def track_incident_transition(new_status: str) -> tuple[bool, bool]:
-    conn = get_conn()
-    if conn is None:
-        return False, False
-
-    down_started = False
-    down_recovered = False
-    with conn:
-        last_status_row = conn.execute("SELECT status FROM checks ORDER BY id DESC LIMIT 1").fetchone()
-        last_status = last_status_row[0] if last_status_row else None
-
-        open_incident = conn.execute(
-            "SELECT id, started_at FROM incidents WHERE ended_at IS NULL ORDER BY id DESC LIMIT 1"
-        ).fetchone()
-
-        if new_status == "DOWN" and (last_status is None or last_status == "UP") and open_incident is None:
-            conn.execute(
-                "INSERT INTO incidents (started_at, start_reason) VALUES (?, ?)",
-                (get_now().isoformat(), "Connectivity check failed"),
+            """
+            CREATE TABLE IF NOT EXISTS admin_form (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                number_text TEXT,
+                name TEXT,
+                rank TEXT,
+                last_mission TEXT,
+                last_mission_date TEXT,
+                elite_flag TEXT,
+                target_flag TEXT,
+                course_cleared TEXT,
+                shooting TEXT,
+                fitness TEXT,
+                weight_text TEXT,
+                visa_number TEXT,
+                visa_expiry TEXT,
+                notes TEXT,
+                created_at TEXT
             )
-            down_started = True
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS names_form (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                number_text TEXT,
+                arabic_name TEXT,
+                english_name TEXT,
+                rank TEXT,
+                civil_id TEXT,
+                dob TEXT,
+                doe TEXT,
+                passport_number TEXT,
+                statement_number TEXT,
+                mission TEXT,
+                aircraft TEXT,
+                created_at TEXT
+            )
+            """
+        )
 
-        if new_status == "UP" and open_incident is not None:
-            incident_id, started_at = open_incident
-            started = datetime.fromisoformat(started_at)
-            ended = get_now()
-            duration = (ended - started).total_seconds()
-            conn.execute(
+
+def fetch_df(table: str) -> pd.DataFrame:
+    with get_conn() as conn:
+        if table == "admin_form":
+            return pd.read_sql_query(
                 """
-                UPDATE incidents
-                SET ended_at=?, duration_seconds=?, end_reason=?
-                WHERE id=?
+                SELECT number_text AS 'الرقم', name AS 'الاسم', rank AS 'الرتبة',
+                       last_mission AS 'آخر مهمة', last_mission_date AS 'تاريخ آخر مهمة',
+                       elite_flag AS 'النخبة', target_flag AS 'مستهدف',
+                       course_cleared AS 'اجتاز الدورة', shooting AS 'الرماية',
+                       fitness AS 'اللياقة', weight_text AS 'الوزن', visa_number AS 'نوع التأشيرة',
+                       visa_expiry AS 'تاريخ انتهاء التأشيرة', notes AS 'ملاحظات'
+                FROM admin_form
+                ORDER BY id DESC
                 """,
-                (ended.isoformat(), duration, "Connectivity restored", incident_id),
+                conn,
             )
-            down_recovered = True
-
-    conn.close()
-    return down_started, down_recovered
-
-
-def get_incidents(limit: int = 20) -> pd.DataFrame:
-    conn = get_conn()
-    if conn is None:
-        return pd.DataFrame(columns=["started_at", "ended_at", "duration", "start_reason", "end_reason"])
-
-    query = """
-    SELECT started_at, ended_at, duration_seconds, start_reason, end_reason
-    FROM incidents
-    ORDER BY id DESC
-    LIMIT ?
-    """
-    df = pd.read_sql_query(query, conn, params=(limit,))
-    conn.close()
-
-    if not df.empty:
-        df["duration"] = df["duration_seconds"].apply(format_duration)
-        df.drop(columns=["duration_seconds"], inplace=True)
-    return df
+        return pd.read_sql_query(
+            """
+            SELECT number_text AS 'الرقم', arabic_name AS 'الاسم', english_name AS 'NAME',
+                   rank AS 'الرتبة', civil_id AS 'السجل المدني', dob AS 'DOB', doe AS 'DOE',
+                   passport_number AS 'رقم الجواز', statement_number AS 'رقم الايبان',
+                   mission AS 'المهمة', aircraft AS 'الطائرة'
+            FROM names_form
+            ORDER BY id DESC
+            """,
+            conn,
+        )
 
 
-def compute_sla(hours: int = 24) -> dict:
-    conn = get_conn()
-    if conn is None:
-        return {"uptime_pct": None, "checks_count": 0, "outages": 0, "avg_speed": None}
-
-    since = (get_now().timestamp() - hours * 3600)
-    since_iso = datetime.fromtimestamp(since, tz=ZoneInfo("Asia/Riyadh")).isoformat()
-
-    checks_df = pd.read_sql_query(
-        "SELECT status FROM checks WHERE timestamp >= ?", conn, params=(since_iso,)
-    )
-    speed_df = pd.read_sql_query(
-        "SELECT download_mbps FROM speed_checks WHERE timestamp >= ?", conn, params=(since_iso,)
-    )
-    outages = conn.execute(
-        "SELECT COUNT(*) FROM incidents WHERE started_at >= ?", (since_iso,)
-    ).fetchone()[0]
-    conn.close()
-
-    checks_count = len(checks_df)
-    uptime_pct = None
-    if checks_count > 0:
-        uptime_pct = round((checks_df["status"].eq("UP").sum() / checks_count) * 100, 2)
-
-    avg_speed = None
-    if not speed_df.empty:
-        speed_vals = speed_df["download_mbps"].dropna()
-        if not speed_vals.empty:
-            avg_speed = round(float(speed_vals.mean()), 2)
-
-    return {
-        "uptime_pct": uptime_pct,
-        "checks_count": checks_count,
-        "outages": outages,
-        "avg_speed": avg_speed,
-    }
-
-
-def _measure_latency_ms(url: str, timeout: int = 5) -> float | None:
-    try:
-        started = time.perf_counter()
-        requests.get(url, timeout=timeout)
-        return (time.perf_counter() - started) * 1000
-    except requests.RequestException:
-        return None
-
-
-def _measure_download_mbps(url: str, sample_bytes: int, timeout: int = 10) -> float | None:
-    try:
-        started = time.perf_counter()
-        downloaded = 0
-        with requests.get(url, stream=True, timeout=timeout) as response:
-            response.raise_for_status()
-            for chunk in response.iter_content(chunk_size=64 * 1024):
-                if not chunk:
-                    continue
-                downloaded += len(chunk)
-                if downloaded >= sample_bytes:
-                    break
-        elapsed = time.perf_counter() - started
-        if elapsed <= 0 or downloaded == 0:
-            return None
-        return (downloaded * 8) / (elapsed * 1_000_000)
-    except requests.RequestException:
-        return None
-
-
-def run_speed_test(mode: str) -> dict:
-    sample_bytes = 512 * 1024 if mode == "quick" else 3 * 1024 * 1024
-    samples = [
-        value
-        for value in (_measure_download_mbps(url, sample_bytes) for url in SPEED_TEST_URLS)
-        if value is not None
-    ]
-
-    download_mbps = mean(samples) if samples else None
-    latency_ms = _measure_latency_ms("https://www.google.com/generate_204")
-
-    return {
-        "mode": mode,
-        "download_mbps": download_mbps,
-        "latency_ms": latency_ms,
-    }
-
-
-def save_speed_check(result: dict, drop_detected: bool) -> None:
-    conn = get_conn()
-    if conn is None:
-        return
-
-    with conn:
+def insert_admin(values: dict) -> None:
+    with get_conn() as conn:
+        number_text = normalize_number_text(values["الرقم"])
         conn.execute(
             """
-            INSERT INTO speed_checks (mode, download_mbps, latency_ms, drop_detected, threshold_mbps, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO admin_form (
+                number_text, name, rank, last_mission, last_mission_date,
+                elite_flag, target_flag, course_cleared, shooting,
+                fitness, weight_text, visa_number, visa_expiry, notes, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                result["mode"],
-                result["download_mbps"],
-                result["latency_ms"],
-                int(drop_detected),
-                SPEED_DROP_THRESHOLD_MBPS,
-                get_now().isoformat(),
+                number_text,
+                values["الاسم"],
+                values["الرتبة"],
+                values["آخر مهمة"],
+                values["تاريخ آخر مهمة"],
+                values["النخبة"],
+                values["مستهدف"],
+                values["اجتاز الدورة"],
+                values["الرماية"],
+                values["اللياقة"],
+                values["الوزن"],
+                values["نوع التأشيرة"],
+                values["تاريخ انتهاء التأشيرة"],
+                values["ملاحظات"],
+                datetime.now().isoformat(),
             ),
         )
-    conn.close()
 
 
-def get_recent_speed_checks(limit: int = 10) -> pd.DataFrame:
-    conn = get_conn()
-    if conn is None:
-        return pd.DataFrame(columns=["mode", "download_mbps", "latency_ms", "drop_detected", "timestamp"])
+def insert_names(values: dict) -> None:
+    with get_conn() as conn:
+        number_text = normalize_number_text(values["الرقم"])
+        conn.execute(
+            """
+            INSERT INTO names_form (
+                number_text, arabic_name, english_name, rank, civil_id,
+                dob, doe, passport_number, statement_number, mission, aircraft, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                number_text,
+                values["الاسم"],
+                values["NAME"],
+                values["الرتبة"],
+                values["السجل المدني"],
+                values["DOB"],
+                values["DOE"],
+                values["رقم الجواز"],
+                values["رقم الايبان"],
+                values["المهمة"],
+                values["الطائرة"],
+                datetime.now().isoformat(),
+            ),
+        )
 
-    query = """
-    SELECT mode, ROUND(download_mbps, 2) AS download_mbps,
-           ROUND(latency_ms, 1) AS latency_ms,
-           drop_detected, timestamp
-    FROM speed_checks
-    ORDER BY id DESC
-    LIMIT ?
-    """
-    df = pd.read_sql_query(query, conn, params=(limit,))
-    conn.close()
-    return df
+
+def delete_by_number(table: str, number_text: str) -> int:
+    cleaned_number = normalize_number_text(number_text)
+    with get_conn() as conn:
+        rows = conn.execute(f"SELECT id, number_text FROM {table}").fetchall()
+        matched_ids = [
+            row_id
+            for row_id, stored_number in rows
+            if normalize_number_text(stored_number) == cleaned_number
+        ]
+        if not matched_ids:
+            return 0
+        placeholders = ",".join("?" for _ in matched_ids)
+        cursor = conn.execute(
+            f"DELETE FROM {table} WHERE id IN ({placeholders})",
+            matched_ids,
+        )
+        return cursor.rowcount
 
 
-def _seconds_since_last_speed_test() -> float | None:
-    conn = get_conn()
-    if conn is None:
-        return None
+def delete_by_number_and_name(table: str, number_text: str, name_text: str) -> int:
+    cleaned_number = normalize_number_text(number_text)
+    cleaned_name = str(name_text).strip()
+    with get_conn() as conn:
+        if table == "admin_form":
+            rows = conn.execute("SELECT id, number_text, name FROM admin_form").fetchall()
+        else:
+            rows = conn.execute("SELECT id, number_text, arabic_name FROM names_form").fetchall()
 
-    row = conn.execute("SELECT timestamp FROM speed_checks ORDER BY id DESC LIMIT 1").fetchone()
-    conn.close()
-    if not row:
-        return None
+        matched_ids = [
+            row_id
+            for row_id, stored_number, stored_name in rows
+            if normalize_number_text(stored_number) == cleaned_number
+            and str(stored_name).strip() == cleaned_name
+        ]
 
-    then = datetime.fromisoformat(row[0])
-    return (get_now() - then).total_seconds()
+        if not matched_ids:
+            return 0
+        placeholders = ",".join("?" for _ in matched_ids)
+        cursor = conn.execute(
+            f"DELETE FROM {table} WHERE id IN ({placeholders})",
+            matched_ids,
+        )
+        return cursor.rowcount
+
+
+def delete_by_row_id(table: str, row_id: int) -> int:
+    with get_conn() as conn:
+        cursor = conn.execute(
+            f"DELETE FROM {table} WHERE id = ?",
+            (row_id,),
+        )
+        return cursor.rowcount
+
+
+def fetch_records_for_delete(table: str) -> pd.DataFrame:
+    with get_conn() as conn:
+        if table == "admin_form":
+            return pd.read_sql_query(
+                """
+                SELECT id, number_text AS 'الرقم', name AS 'الاسم', rank AS 'الرتبة'
+                FROM admin_form
+                ORDER BY id DESC
+                """,
+                conn,
+            )
+        return pd.read_sql_query(
+            """
+            SELECT id, number_text AS 'الرقم', arabic_name AS 'الاسم', rank AS 'الرتبة'
+            FROM names_form
+            ORDER BY id DESC
+            """,
+            conn,
+        )
+
+
+def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    cleaned = df.copy()
+    cleaned.columns = [str(col).strip() for col in cleaned.columns]
+    return cleaned
+
+
+def parse_uploaded_dataframe(uploaded_file) -> tuple[pd.DataFrame, str | None]:
+    file_name = uploaded_file.name.lower()
+    try:
+        if file_name.endswith(".csv"):
+            return normalize_columns(pd.read_csv(uploaded_file)), None
+        if file_name.endswith(".xlsx"):
+            return normalize_columns(pd.read_excel(uploaded_file)), None
+        return pd.DataFrame(), "صيغة الملف غير مدعومة. استخدم CSV أو XLSX."
+    except Exception as error:
+        return pd.DataFrame(), f"تعذر قراءة الملف: {error}"
+
+
+def dataframe_to_csv_bytes(df: pd.DataFrame) -> bytes:
+    return df.to_csv(index=False).encode("utf-8-sig")
+
+
+def dataframe_to_text_bytes(df: pd.DataFrame, title: str) -> bytes:
+    # Fallback export that always works without external dependencies.
+    rows = [title, "=" * len(title), ""]
+    rows.append(" | ".join(df.columns.tolist()))
+    for _, row in df.iterrows():
+        rows.append(" | ".join(str(row[col]) for col in df.columns))
+    text_content = "\n".join(rows)
+    return text_content.encode("utf-8-sig")
 
 
 init_db()
 
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
-if "last_status" not in st.session_state:
-    st.session_state.last_status = None
-if "latest_speed" not in st.session_state:
-    st.session_state.latest_speed = None
-if "speed_alert" not in st.session_state:
-    st.session_state.speed_alert = None
-if "event_message" not in st.session_state:
-    st.session_state.event_message = None
-if "user_role" not in st.session_state:
-    st.session_state.user_role = None
-if "username" not in st.session_state:
-    st.session_state.username = None
-
-
-# ------------------ تسجيل الدخول ------------------
-if not st.session_state.logged_in:
-    st.title("🔐 Login")
-    st.caption("Use your configured credentials to continue.")
-
-    username = st.text_input("Username")
-    password = st.text_input("Password", type="password")
-
-    if st.button("Login", type="primary"):
-        authenticated_user = login(username, password)
-        if authenticated_user:
-            st.session_state.logged_in = True
-            st.session_state.user_role = authenticated_user["role"]
-            st.session_state.username = authenticated_user["username"]
-            st.rerun()
-        else:
-            st.error("Wrong credentials")
-
-    st.info(
-        "Available default users: admin/admin123, manager/manager123, "
-        "technician/tech123, client/client123 (or override with env vars)."
-    )
-    st.stop()
-
-
-# ------------------ واجهة النظام ------------------
-st.title("🛡️ Network Monitoring System")
-now = get_now()
-st.write(f"Date: {now.strftime('%Y-%m-%d')} | Time: {now.strftime('%H:%M:%S')}")
-st.caption(f"Build tag: {APP_RELEASE_TAG}")
-
-current_role = st.session_state.user_role or "client"
-current_username = st.session_state.username or "-"
-
-role_badge_col, logout_col = st.columns([4, 1])
-with role_badge_col:
-    st.info(
-        f"Logged in as: {current_username} | Role: {ROLE_LABELS.get(current_role, current_role)}"
-    )
-with logout_col:
-    if st.button("Logout"):
-        st.session_state.logged_in = False
-        st.session_state.user_role = None
-        st.session_state.username = None
-        st.rerun()
-
-can_run_operations = current_role in {"admin", "manager", "technician"}
-can_view_incidents = current_role in {"admin", "manager", "technician"}
-
-st.subheader("SLA Snapshot (Last 24h)")
-sla = compute_sla(24)
-k1, k2, k3, k4 = st.columns(4)
-k1.metric("Uptime", f"{sla['uptime_pct']}%" if sla["uptime_pct"] is not None else "-")
-k2.metric("Checks", str(sla["checks_count"]))
-k3.metric("Outages", str(sla["outages"]))
-k4.metric("Avg speed", f"{sla['avg_speed']} Mbps" if sla["avg_speed"] is not None else "-")
-
-st.subheader("Connectivity Check")
-st.caption("Targets: " + ", ".join(TARGETS))
-
-col_run, col_auto = st.columns([1, 2])
-with col_run:
-    run_connectivity = st.button("Run check now", type="primary", disabled=not can_run_operations)
-with col_auto:
-    auto_quick_test = st.checkbox(
-        "Auto quick speed test when internet check runs",
-        value=True,
-        disabled=not can_run_operations,
-    )
-if not can_run_operations:
-    st.caption("Read-only mode: your role can view status but cannot run active checks.")
-
-if run_connectivity and can_run_operations:
-    current_status = check_connection(TARGETS)
-    down_started, down_recovered = track_incident_transition(current_status)
-    save_check(current_status)
-    st.session_state.last_status = current_status
-
-    if down_started:
-        msg = f"🚨 Incident started at {get_now().strftime('%Y-%m-%d %H:%M:%S')} (internet DOWN)"
-        send_telegram_alert(msg)
-        st.session_state.event_message = msg
-    elif down_recovered:
-        msg = f"✅ Incident recovered at {get_now().strftime('%Y-%m-%d %H:%M:%S')} (internet UP)"
-        send_telegram_alert(msg)
-        st.session_state.event_message = msg
-
-if st.session_state.last_status == "DOWN":
-    st.error("🚨 Internet is DOWN")
-elif st.session_state.last_status == "UP":
-    st.success("✅ Internet is UP")
-else:
-    st.warning("No checks have been run yet in this session.")
-
-if st.session_state.event_message:
-    st.info(st.session_state.event_message)
-
-
-st.subheader("Speed Monitoring (Download + Latency)")
-st.caption(
-    f"Threshold: {SPEED_DROP_THRESHOLD_MBPS:.1f} Mbps | "
-    f"Auto quick-test interval: {QUICK_TEST_INTERVAL_SECONDS}s"
+st.markdown(
+    """
+    <style>
+    .stApp { direction: rtl; }
+    h1, h2, h3, p, label, div { text-align: right; }
+    </style>
+    """,
+    unsafe_allow_html=True,
 )
 
-c1, c2 = st.columns(2)
-full_clicked = c1.button("Run full speed test", disabled=not can_run_operations)
-quick_clicked = c2.button("Run quick speed test", disabled=not can_run_operations)
+st.title("📁 نظام إدارة بيانات الموظفين")
+st.caption("نسخة أولية مطابقة مبدئيًا للنموذجين المرسلين، مع إدخال يدوي + بحث + استيراد/تصدير.")
+st.info("تشغيل البرنامج يكون عبر الأمر: streamlit run app.py")
 
-if full_clicked or quick_clicked:
-    mode = "full" if full_clicked else "quick"
-    with st.spinner(f"Running {mode} speed test..."):
-        result = run_speed_test(mode)
+main_tab, admin_tab, names_tab, records_tab, import_export_tab = st.tabs(
+    ["لوحة البيانات", "نموذج الإدارة", "بيان الأسماء", "إدارة السجلات", "الاستيراد والتصدير"]
+)
 
-    speed_value = result["download_mbps"]
-    drop_detected = speed_value is not None and speed_value < SPEED_DROP_THRESHOLD_MBPS
-    save_speed_check(result, drop_detected)
-    st.session_state.latest_speed = result
+with main_tab:
+    st.subheader("ملخص سريع")
+    admin_df = fetch_df("admin_form")
+    names_df = fetch_df("names_form")
+    c1, c2 = st.columns(2)
+    c1.metric("عدد سجلات نموذج الإدارة", len(admin_df))
+    c2.metric("عدد سجلات بيان الأسماء", len(names_df))
 
-    if drop_detected:
-        st.session_state.speed_alert = (
-            f"⚠️ Speed dropped to {speed_value:.2f} Mbps (< {SPEED_DROP_THRESHOLD_MBPS:.1f} Mbps). "
-            "Running automatic quick verification now..."
-        )
-        send_telegram_alert(st.session_state.speed_alert)
-        with st.spinner("Running automatic quick verification..."):
-            quick_result = run_speed_test("quick")
-        quick_drop = (
-            quick_result["download_mbps"] is not None
-            and quick_result["download_mbps"] < SPEED_DROP_THRESHOLD_MBPS
-        )
-        save_speed_check(quick_result, quick_drop)
-        st.session_state.latest_speed = quick_result
-
-
-if auto_quick_test and st.session_state.last_status == "UP" and run_connectivity:
-    seconds_since_last = _seconds_since_last_speed_test()
-    if seconds_since_last is None or seconds_since_last >= QUICK_TEST_INTERVAL_SECONDS:
-        with st.spinner("Auto-running quick speed test..."):
-            quick_result = run_speed_test("quick")
-        quick_drop = (
-            quick_result["download_mbps"] is not None
-            and quick_result["download_mbps"] < SPEED_DROP_THRESHOLD_MBPS
-        )
-        save_speed_check(quick_result, quick_drop)
-        st.session_state.latest_speed = quick_result
-        if quick_drop:
-            st.session_state.speed_alert = (
-                f"🚨 Low speed detected automatically: {quick_result['download_mbps']:.2f} Mbps"
-            )
-            send_telegram_alert(st.session_state.speed_alert)
-
-if st.session_state.speed_alert:
-    st.error(st.session_state.speed_alert)
-
-latest = st.session_state.latest_speed
-if latest:
-    dl = latest["download_mbps"]
-    lat = latest["latency_ms"]
-    dl_text = f"{dl:.2f} Mbps" if dl is not None else "unavailable"
-    st.info(f"Latest speed result → Mode: {latest['mode']} | Download: {dl_text}")
-    if lat is not None:
-        st.caption(f"Latency: {lat:.1f} ms")
-
-st.subheader("Recent checks")
-recent_checks = get_recent_checks()
-if recent_checks.empty:
-    st.write("No stored checks yet.")
-else:
-    st.dataframe(recent_checks, width="stretch")
-
-st.subheader("Recent speed checks")
-recent_speed = get_recent_speed_checks()
-if recent_speed.empty:
-    st.write("No speed checks yet.")
-else:
-    st.dataframe(recent_speed, width="stretch")
-
-if can_view_incidents:
-    st.subheader("Incident timeline")
-    incident_df = get_incidents()
-    if incident_df.empty:
-        st.write("No incidents yet.")
+    keyword = st.text_input("بحث عام في جميع الجداول", placeholder="اكتب الاسم أو الرقم أو الرتبة...")
+    if keyword:
+        admin_filtered = admin_df[
+            admin_df.astype(str).apply(lambda col: col.str.contains(keyword, case=False, na=False)).any(axis=1)
+        ]
+        names_filtered = names_df[
+            names_df.astype(str).apply(lambda col: col.str.contains(keyword, case=False, na=False)).any(axis=1)
+        ]
     else:
-        st.dataframe(incident_df, width="stretch")
+        admin_filtered = admin_df
+        names_filtered = names_df
 
-if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
-    st.caption("Telegram alerts are enabled.")
-else:
-    st.caption("Telegram alerts are disabled. Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to enable.")
+    st.markdown("#### نتائج نموذج الإدارة")
+    st.dataframe(admin_filtered, use_container_width=True, hide_index=True)
+
+    st.markdown("#### نتائج بيان الأسماء")
+    st.dataframe(names_filtered, use_container_width=True, hide_index=True)
+
+with admin_tab:
+    st.subheader("إضافة سجل جديد - نموذج الإدارة")
+    with st.form("admin_form_entry", clear_on_submit=True):
+        row1 = st.columns(4)
+        values = {
+            "الرقم": row1[0].text_input("الرقم"),
+            "الاسم": row1[1].text_input("الاسم"),
+            "الرتبة": row1[2].text_input("الرتبة"),
+            "آخر مهمة": row1[3].text_input("آخر مهمة"),
+        }
+        row2 = st.columns(4)
+        values.update(
+            {
+                "تاريخ آخر مهمة": row2[0].text_input("تاريخ آخر مهمة"),
+                "النخبة": row2[1].selectbox("النخبة", ["", "نعم", "لا"]),
+                "مستهدف": row2[2].selectbox("مستهدف", ["", "نعم", "لا"]),
+                "اجتاز الدورة": row2[3].selectbox("اجتاز الدورة", ["", "نعم", "لا"]),
+            }
+        )
+        row3 = st.columns(4)
+        values.update(
+            {
+                "الرماية": row3[0].text_input("الرماية"),
+                "اللياقة": row3[1].text_input("اللياقة"),
+                "الوزن": row3[2].text_input("الوزن"),
+                "نوع التأشيرة": row3[3].text_input("نوع التأشيرة"),
+            }
+        )
+        values["تاريخ انتهاء التأشيرة"] = st.text_input("تاريخ انتهاء التأشيرة")
+        values["ملاحظات"] = st.text_area("ملاحظات")
+
+        submit = st.form_submit_button("حفظ السجل", type="primary")
+        if submit:
+            if not values["الاسم"]:
+                st.error("الاسم مطلوب على الأقل.")
+            else:
+                insert_admin(values)
+                st.success("تم حفظ سجل نموذج الإدارة بنجاح.")
+
+    st.markdown("#### جدول نموذج الإدارة")
+    st.dataframe(fetch_df("admin_form"), use_container_width=True, hide_index=True)
+
+with names_tab:
+    st.subheader("إضافة سجل جديد - بيان الأسماء")
+    with st.form("names_form_entry", clear_on_submit=True):
+        r1 = st.columns(4)
+        values = {
+            "الرقم": r1[0].text_input("الرقم"),
+            "الاسم": r1[1].text_input("الاسم"),
+            "NAME": r1[2].text_input("NAME"),
+            "الرتبة": r1[3].text_input("الرتبة"),
+        }
+        r2 = st.columns(4)
+        values.update(
+            {
+                "السجل المدني": r2[0].text_input("السجل المدني"),
+                "DOB": r2[1].text_input("DOB"),
+                "DOE": r2[2].text_input("DOE"),
+                "رقم الجواز": r2[3].text_input("رقم الجواز"),
+            }
+        )
+        r3 = st.columns(3)
+        values.update(
+            {
+                "رقم الايبان": r3[0].text_input("رقم الايبان"),
+                "المهمة": r3[1].text_input("المهمة"),
+                "الطائرة": r3[2].text_input("الطائرة"),
+            }
+        )
+
+        submit = st.form_submit_button("حفظ السجل", type="primary")
+        if submit:
+            if not values["الاسم"]:
+                st.error("الاسم مطلوب على الأقل.")
+            else:
+                insert_names(values)
+                st.success("تم حفظ سجل بيان الأسماء بنجاح.")
+
+    st.markdown("#### جدول بيان الأسماء")
+    st.dataframe(fetch_df("names_form"), use_container_width=True, hide_index=True)
+
+with records_tab:
+    st.subheader("إدارة السجلات (حذف السجلات الخاطئة)")
+    st.caption("يمكنك الآن الحذف برقم فقط أو رقم + اسم أو حذف سجل كامل بدقة عبر المعرف.")
+    table_choice = st.selectbox("اختر الجدول", ["admin_form", "names_form"])
+    delete_mode = st.radio(
+        "طريقة الحذف",
+        [
+            "حذف حسب الرقم",
+            "حذف حسب الرقم + الاسم",
+            "حذف سجل كامل (اختيار سجل محدد)",
+        ],
+    )
+
+    if delete_mode == "حذف حسب الرقم":
+        number_to_delete = st.text_input("رقم السجل المراد حذفه", key="delete_number_only")
+        if st.button("حذف بالرقم", type="primary"):
+            if not number_to_delete.strip():
+                st.error("يرجى إدخال الرقم أولًا.")
+            else:
+                deleted = delete_by_number(table_choice, number_to_delete.strip())
+                if deleted > 0:
+                    st.success(f"تم حذف {deleted} سجل من {table_choice}.")
+                else:
+                    st.warning("لم يتم العثور على سجل مطابق لهذا الرقم.")
+
+    elif delete_mode == "حذف حسب الرقم + الاسم":
+        c1, c2 = st.columns(2)
+        number_to_delete = c1.text_input("رقم السجل", key="delete_number_name_number")
+        name_to_delete = c2.text_input("اسم السجل", key="delete_number_name_name")
+        if st.button("حذف بالرقم والاسم", type="primary"):
+            if not number_to_delete.strip() or not name_to_delete.strip():
+                st.error("يرجى إدخال الرقم والاسم معًا.")
+            else:
+                deleted = delete_by_number_and_name(
+                    table_choice,
+                    number_to_delete.strip(),
+                    name_to_delete.strip(),
+                )
+                if deleted > 0:
+                    st.success(f"تم حذف {deleted} سجل مطابق للرقم والاسم.")
+                else:
+                    st.warning("لم يتم العثور على سجل مطابق للرقم والاسم.")
+
+    else:
+        delete_df = fetch_records_for_delete(table_choice)
+        if delete_df.empty:
+            st.info("لا توجد سجلات حالياً للحذف.")
+        else:
+            options = [
+                f"{int(row.id)} | {row['الرقم']} | {row['الاسم']} | {row['الرتبة']}"
+                for _, row in delete_df.iterrows()
+            ]
+            selected_option = st.selectbox("اختر سجلًا كاملاً للحذف", options)
+            selected_id = int(selected_option.split("|", maxsplit=1)[0].strip())
+            st.warning("تنبيه: سيتم حذف السجل المحدد بالكامل نهائيًا.")
+            if st.button("تأكيد حذف السجل المحدد", type="primary"):
+                deleted = delete_by_row_id(table_choice, selected_id)
+                if deleted > 0:
+                    st.success("تم حذف السجل الكامل بنجاح.")
+                else:
+                    st.warning("تعذر حذف السجل، ربما تم حذفه مسبقًا.")
+
+    st.markdown("#### آخر البيانات الحالية")
+    st.dataframe(fetch_df(table_choice), use_container_width=True, hide_index=True)
+
+with import_export_tab:
+    st.subheader("الاستيراد")
+    st.caption("يدعم هذه النسخة التجريبية: CSV و XLSX بشكل مباشر.")
+    target_table = st.radio("وجهة الاستيراد", ["admin_form", "names_form"], horizontal=True)
+    uploaded = st.file_uploader("ارفع ملف CSV أو XLSX", type=["csv", "xlsx"])
+    if uploaded:
+        imported_df, upload_error = parse_uploaded_dataframe(uploaded)
+        if upload_error:
+            st.error(upload_error)
+        elif imported_df.empty:
+            st.error("الملف فارغ.")
+        else:
+            st.write("معاينة البيانات:")
+            st.dataframe(imported_df.head(20), use_container_width=True)
+            required_cols = ADMIN_COLUMNS if target_table == "admin_form" else NAMES_COLUMNS
+
+            st.markdown("#### اختر الخانات التي تريد استيرادها")
+            selected_target_columns = st.multiselect(
+                "الخانات المطلوب تعبئتها في النظام",
+                required_cols,
+                default=[col for col in required_cols if col in imported_df.columns],
+            )
+
+            column_mapping: dict[str, str] = {}
+            if selected_target_columns:
+                st.markdown("#### اربط كل خانة بعمود من ملفك")
+                for target_col in selected_target_columns:
+                    default_index = (
+                        imported_df.columns.get_loc(target_col)
+                        if target_col in imported_df.columns
+                        else 0
+                    )
+                    source_col = st.selectbox(
+                        f"المصدر لحقل: {target_col}",
+                        options=imported_df.columns.tolist(),
+                        index=default_index,
+                        key=f"map_{target_table}_{target_col}",
+                    )
+                    column_mapping[target_col] = source_col
+
+            if st.button("تنفيذ الاستيراد", type="primary"):
+                if not selected_target_columns:
+                    st.error("اختر خانة واحدة على الأقل للاستيراد.")
+                else:
+                    mapped_sources = list(column_mapping.values())
+                    missing_sources = [src for src in mapped_sources if src not in imported_df.columns]
+                    if missing_sources:
+                        st.error(f"تعذر العثور على أعمدة المصدر التالية: {', '.join(missing_sources)}")
+                        st.stop()
+
+                    if target_table == "admin_form":
+                        for _, rec in imported_df.iterrows():
+                            payload = {col: "" for col in ADMIN_COLUMNS}
+                            for target_col, source_col in column_mapping.items():
+                                value = rec[source_col]
+                                payload[target_col] = "" if pd.isna(value) else str(value).strip()
+                            insert_admin(payload)
+                    else:
+                        for _, rec in imported_df.iterrows():
+                            payload = {col: "" for col in NAMES_COLUMNS}
+                            for target_col, source_col in column_mapping.items():
+                                value = rec[source_col]
+                                payload[target_col] = "" if pd.isna(value) else str(value).strip()
+                            insert_names(payload)
+                    st.success("تم الاستيراد بنجاح حسب الخانات التي اخترتها.")
+
+    st.divider()
+    st.subheader("قوالب جاهزة للاستيراد")
+    admin_template = pd.DataFrame(columns=ADMIN_COLUMNS)
+    names_template = pd.DataFrame(columns=NAMES_COLUMNS)
+    st.download_button(
+        "تحميل قالب نموذج الإدارة (CSV)",
+        data=dataframe_to_csv_bytes(admin_template),
+        file_name="admin_form_template.csv",
+        mime="text/csv",
+    )
+    st.download_button(
+        "تحميل قالب بيان الأسماء (CSV)",
+        data=dataframe_to_csv_bytes(names_template),
+        file_name="names_form_template.csv",
+        mime="text/csv",
+    )
+
+    st.divider()
+    st.subheader("التصدير")
+    export_table = st.radio("اختر النموذج", ["admin_form", "names_form"], horizontal=True, key="export")
+    export_df = fetch_df(export_table)
+
+    if export_df.empty:
+        st.warning("لا توجد بيانات حاليًا للتصدير.")
+    else:
+        st.download_button(
+            "تصدير CSV (Excel)",
+            data=dataframe_to_csv_bytes(export_df),
+            file_name=f"{export_table}.csv",
+            mime="text/csv",
+        )
+        st.download_button(
+            "تصدير نص منسق (بديل PDF مؤقت)",
+            data=dataframe_to_text_bytes(export_df, title=f"Export - {export_table}"),
+            file_name=f"{export_table}.txt",
+            mime="text/plain",
+        )
+
+st.info("الخطوة القادمة: إضافة PDF/Word حقيقي مع استخراج تلقائي دقيق حسب كل نموذج.")
